@@ -34,7 +34,8 @@ TEST(CheckedSub, DetectsUnsignedUnderflow) {
 
 TEST(CheckedMul, DetectsOverflow) {
     constexpr uint64_t max = std::numeric_limits<uint64_t>::max();
-    EXPECT_EQ(CheckedMul<uint64_t>(1'000'000, 1'000'000), std::optional<uint64_t>(1'000'000'000'000));
+    EXPECT_EQ(CheckedMul<uint64_t>(1'000'000, 1'000'000),
+              std::optional<uint64_t>(1'000'000'000'000));
     EXPECT_FALSE(CheckedMul<uint64_t>(max, 2).has_value());
     EXPECT_EQ(CheckedMul<uint64_t>(max, 0), std::optional<uint64_t>(0));
     EXPECT_EQ(CheckedMul<uint64_t>(max, 1), std::optional<uint64_t>(max));

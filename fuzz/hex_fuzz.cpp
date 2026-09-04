@@ -13,10 +13,10 @@
 ///      input, two nodes can read the same string as different bytes.
 ///   2. Every byte sequence must round-trip through encode then decode.
 
-#include "fuzz_assert.hpp"
-
 #include <amarian/util/hex.hpp>
 #include <amarian/util/types.hpp>
+
+#include "fuzz_assert.hpp"
 
 #include <cstddef>
 #include <cstdint>

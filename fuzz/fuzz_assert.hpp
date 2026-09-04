@@ -11,11 +11,15 @@
 #include <cstdio>
 #include <cstdlib>
 
-#define FUZZ_CHECK(cond, message)                                                                  \
-    do {                                                                                           \
-        if (!(cond)) {                                                                             \
-            std::fprintf(stderr, "FUZZ_CHECK failed at %s:%d\n  condition: %s\n  reason: %s\n",    \
-                         __FILE__, __LINE__, #cond, (message));                                    \
-            std::abort();                                                                          \
-        }                                                                                          \
+#define FUZZ_CHECK(cond, message)                                                       \
+    do {                                                                                \
+        if (!(cond)) {                                                                  \
+            std::fprintf(stderr,                                                        \
+                         "FUZZ_CHECK failed at %s:%d\n  condition: %s\n  reason: %s\n", \
+                         __FILE__,                                                      \
+                         __LINE__,                                                      \
+                         #cond,                                                         \
+                         (message));                                                    \
+            std::abort();                                                               \
+        }                                                                               \
     } while (false)

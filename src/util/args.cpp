@@ -34,7 +34,8 @@ void ArgsParser::Add(const ArgSpec& spec) {
 }
 
 const ArgSpec* ArgsParser::FindLong(std::string_view name) const {
-    const auto it = std::ranges::find_if(specs_, [name](const ArgSpec& s) { return s.name == name; });
+    const auto it =
+        std::ranges::find_if(specs_, [name](const ArgSpec& s) { return s.name == name; });
     return it == specs_.end() ? nullptr : &*it;
 }
 
@@ -96,8 +97,8 @@ Status ArgsParser::Parse(int argc, const char* const* argv) {
     bool options_ended = false;
 
     const auto commit = [&](const ArgSpec& spec, std::string value) -> Status {
-        const auto dup = std::ranges::find_if(
-            parsed, [&spec](const Parsed& p) { return p.name == spec.name; });
+        const auto dup =
+            std::ranges::find_if(parsed, [&spec](const Parsed& p) { return p.name == spec.name; });
         if (dup != parsed.end()) {
             return Fail("args.duplicate_option", "--" + std::string(spec.name));
         }
@@ -151,51 +152,51 @@ Status ArgsParser::Parse(int argc, const char* const* argv) {
         }
 
         switch (spec->kind) {
-        case ArgKind::Flag: {
-            if (negated && has_inline) {
-                return Fail("args.conflicting_value", std::string(arg));
+            case ArgKind::Flag: {
+                if (negated && has_inline) {
+                    return Fail("args.conflicting_value", std::string(arg));
+                }
+                std::string value = negated ? "0" : "1";
+                if (has_inline) {
+                    if (Contains(kTrueWords, inline_value)) {
+                        value = "1";
+                    } else if (Contains(kFalseWords, inline_value)) {
+                        value = "0";
+                    } else {
+                        return Fail("args.invalid_boolean", std::string(arg));
+                    }
+                }
+                AMARIAN_TRY(commit(*spec, std::move(value)));
+                break;
             }
-            std::string value = negated ? "0" : "1";
-            if (has_inline) {
-                if (Contains(kTrueWords, inline_value)) {
-                    value = "1";
-                } else if (Contains(kFalseWords, inline_value)) {
-                    value = "0";
+            case ArgKind::String:
+            case ArgKind::Integer: {
+                if (negated) {
+                    return Fail("args.not_a_flag", std::string(token));
+                }
+                std::string value;
+                if (has_inline) {
+                    value = inline_value;
                 } else {
-                    return Fail("args.invalid_boolean", std::string(arg));
+                    if (i + 1 >= argc) {
+                        return Fail("args.missing_value", "--" + std::string(spec->name));
+                    }
+                    ++i;
+                    value = argv[i];
                 }
-            }
-            AMARIAN_TRY(commit(*spec, std::move(value)));
-            break;
-        }
-        case ArgKind::String:
-        case ArgKind::Integer: {
-            if (negated) {
-                return Fail("args.not_a_flag", std::string(token));
-            }
-            std::string value;
-            if (has_inline) {
-                value = inline_value;
-            } else {
-                if (i + 1 >= argc) {
-                    return Fail("args.missing_value", "--" + std::string(spec->name));
+                if (spec->kind == ArgKind::Integer) {
+                    int64_t probe = 0;
+                    const char* begin = value.data();
+                    const char* end = begin + value.size();
+                    const auto r = std::from_chars(begin, end, probe);
+                    if (r.ec != std::errc{} || r.ptr != end) {
+                        return Fail("args.invalid_integer",
+                                    "--" + std::string(spec->name) + "=" + value);
+                    }
                 }
-                ++i;
-                value = argv[i];
+                AMARIAN_TRY(commit(*spec, std::move(value)));
+                break;
             }
-            if (spec->kind == ArgKind::Integer) {
-                int64_t probe = 0;
-                const char* begin = value.data();
-                const char* end = begin + value.size();
-                const auto r = std::from_chars(begin, end, probe);
-                if (r.ec != std::errc{} || r.ptr != end) {
-                    return Fail("args.invalid_integer",
-                                "--" + std::string(spec->name) + "=" + value);
-                }
-            }
-            AMARIAN_TRY(commit(*spec, std::move(value)));
-            break;
-        }
         }
     }
 

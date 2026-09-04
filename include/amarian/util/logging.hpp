@@ -75,11 +75,11 @@ void Emit(Level level, Category category, std::string_view message);
 }  // namespace amarian::log
 
 /// Formatting is skipped entirely when the level/category is disabled.
-#define AMARIAN_LOG(level, category, ...)                                                          \
-    do {                                                                                           \
-        if (::amarian::log::WillLog((level), (category))) {                                        \
-            ::amarian::log::Emit((level), (category), std::format(__VA_ARGS__));                   \
-        }                                                                                          \
+#define AMARIAN_LOG(level, category, ...)                                        \
+    do {                                                                         \
+        if (::amarian::log::WillLog((level), (category))) {                      \
+            ::amarian::log::Emit((level), (category), std::format(__VA_ARGS__)); \
+        }                                                                        \
     } while (false)
 
 #define AMARIAN_ERROR(cat, ...) AMARIAN_LOG(::amarian::log::Level::Error, (cat), __VA_ARGS__)

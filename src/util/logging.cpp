@@ -115,9 +115,8 @@ bool WillLog(Level level, Category category) noexcept {
 }
 
 void Emit(Level level, Category category, std::string_view message) {
-    const std::string line =
-        std::format("{}[{}] [{}] {}\n", Timestamp(), LevelName(level), CategoryName(category),
-                    message);
+    const std::string line = std::format(
+        "{}[{}] [{}] {}\n", Timestamp(), LevelName(level), CategoryName(category), message);
     const std::lock_guard lock(SinkMutex());
     (void)std::fwrite(line.data(), 1, line.size(), stderr);
     if (std::FILE* f = FileSink(); f != nullptr) {

@@ -16,7 +16,7 @@
 
 namespace amarian {
 
-template <std::integral T>
+template<std::integral T>
 [[nodiscard]] constexpr std::optional<T> CheckedAdd(T a, T b) noexcept {
     T out{};
     if (__builtin_add_overflow(a, b, &out)) {
@@ -25,7 +25,7 @@ template <std::integral T>
     return out;
 }
 
-template <std::integral T>
+template<std::integral T>
 [[nodiscard]] constexpr std::optional<T> CheckedSub(T a, T b) noexcept {
     T out{};
     if (__builtin_sub_overflow(a, b, &out)) {
@@ -34,7 +34,7 @@ template <std::integral T>
     return out;
 }
 
-template <std::integral T>
+template<std::integral T>
 [[nodiscard]] constexpr std::optional<T> CheckedMul(T a, T b) noexcept {
     T out{};
     if (__builtin_mul_overflow(a, b, &out)) {
@@ -44,7 +44,7 @@ template <std::integral T>
 }
 
 /// Adds into an accumulator, returning false (and leaving `acc` untouched) on overflow.
-template <std::integral T>
+template<std::integral T>
 [[nodiscard]] constexpr bool TryAccumulate(T& acc, T value) noexcept {
     const auto sum = CheckedAdd(acc, value);
     if (!sum.has_value()) {
@@ -58,7 +58,7 @@ template <std::integral T>
 ///
 /// Uses std::cmp_* rather than a wider intermediate type so it stays strictly
 /// conforming (no __int128) and correct for every signed/unsigned combination.
-template <std::integral To, std::integral From>
+template<std::integral To, std::integral From>
 [[nodiscard]] constexpr std::optional<To> TryNarrow(From value) noexcept {
     if (std::cmp_less(value, std::numeric_limits<To>::min())) {
         return std::nullopt;

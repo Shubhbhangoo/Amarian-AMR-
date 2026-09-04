@@ -38,13 +38,20 @@ TEST(Version, UserAgentIsBip14Shaped) {
 // a change to either constant has to be made deliberately.
 static_assert(MIN_PEER_PROTOCOL_VERSION <= PROTOCOL_VERSION,
               "cannot require peers to speak a protocol newer than this build's");
-static_assert(PROTOCOL_VERSION == 1, "bumping PROTOCOL_VERSION is a wire-protocol change: update "
-                                     "the handshake compatibility tests and docs/NETWORK.md");
+static_assert(PROTOCOL_VERSION == 1,
+              "bumping PROTOCOL_VERSION is a wire-protocol change: update "
+              "the handshake compatibility tests and docs/NETWORK.md");
 
 TEST(Version, BuildInfoReportsTheThingsABugReportNeeds) {
     const std::string info = BuildInfoString();
-    for (const char* key : {"version", "compiler", "build type", "hardening", "sanitizers",
-                            "libsecp256k1", "OpenSSL (build)", "OpenSSL (runtime)"}) {
+    for (const char* key : {"version",
+                            "compiler",
+                            "build type",
+                            "hardening",
+                            "sanitizers",
+                            "libsecp256k1",
+                            "OpenSSL (build)",
+                            "OpenSSL (runtime)"}) {
         EXPECT_NE(info.find(key), std::string::npos) << "missing: " << key;
     }
 }

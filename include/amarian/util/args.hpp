@@ -64,7 +64,8 @@ public:
     /// Value accessors. Asking for a name that was never registered is a
     /// programming error and asserts, because a typo in code must not silently
     /// read as "absent".
-    [[nodiscard]] std::string GetString(std::string_view name, std::string_view fallback = {}) const;
+    [[nodiscard]] std::string GetString(std::string_view name,
+                                        std::string_view fallback = {}) const;
     [[nodiscard]] int64_t GetInt(std::string_view name, int64_t fallback = 0) const;
     [[nodiscard]] bool GetBool(std::string_view name, bool fallback = false) const;
 

@@ -67,8 +67,8 @@ public:
     [[nodiscard]] std::string ToHexInternal() const;
 
     friend constexpr bool operator==(const Hash256&, const Hash256&) noexcept = default;
-    friend constexpr std::strong_ordering operator<=>(const Hash256& a,
-                                                      const Hash256& b) noexcept {
+
+    friend constexpr std::strong_ordering operator<=>(const Hash256& a, const Hash256& b) noexcept {
         return a.data_ <=> b.data_;
     }
 
@@ -86,7 +86,7 @@ static_assert(sizeof(Hash256) == Hash256::SIZE, "Hash256 must be a bare 32-byte 
 
 }  // namespace amarian
 
-template <>
+template<>
 struct std::hash<amarian::Hash256> {
     /// Hash256 values are already uniformly distributed; take the low 8 bytes.
     [[nodiscard]] size_t operator()(const amarian::Hash256& h) const noexcept {

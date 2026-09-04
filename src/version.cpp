@@ -1,6 +1,5 @@
-#include <amarian/version.hpp>
-
 #include <amarian/build_config.hpp>
+#include <amarian/version.hpp>
 
 #include <openssl/crypto.h>
 #include <openssl/opensslv.h>

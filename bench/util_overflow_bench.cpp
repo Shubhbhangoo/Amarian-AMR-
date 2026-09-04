@@ -87,6 +87,7 @@ void BM_SumRaw(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_SumRaw)->Arg(1000)->Arg(20000);
 
 /// Scalar, with an exit condition that never fires. Same shape as the checked
@@ -108,6 +109,7 @@ void BM_SumRawGuarded(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_SumRawGuarded)->Arg(1000)->Arg(20000);
 
 /// The compiler builtin with no wrapper, to separate the check from the optional.
@@ -127,6 +129,7 @@ void BM_SumBuiltin(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_SumBuiltin)->Arg(1000)->Arg(20000);
 
 /// What consensus code calls.
@@ -146,6 +149,7 @@ void BM_SumChecked(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_SumChecked)->Arg(1000)->Arg(20000);
 
 /// CheckedMul is the multiply path — fee rates, weight and subsidy arithmetic.
@@ -162,6 +166,7 @@ void BM_MulChecked(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_MulChecked)->Arg(20000);
 
 }  // namespace

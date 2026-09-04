@@ -22,10 +22,10 @@
 ///   6. Every stored value really came from argv rather than being fabricated.
 ///   7. An option-shaped argument only becomes positional after `--`.
 
-#include "fuzz_assert.hpp"
-
 #include <amarian/util/args.hpp>
 #include <amarian/util/result.hpp>
+
+#include "fuzz_assert.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -38,8 +38,8 @@
 namespace {
 
 using amarian::ArgKind;
-using amarian::ArgSpec;
 using amarian::ArgsParser;
+using amarian::ArgSpec;
 using amarian::Status;
 
 /// argv[0] is skipped by Parse(), so letting the fuzzer control it would only
@@ -138,7 +138,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
     ArgsParser again = BuildParser();
     const Status status_again = again.Parse(argc, argv.data());
-    FUZZ_CHECK(status_again.has_value() == status.has_value(), "parse outcome is not deterministic");
+    FUZZ_CHECK(status_again.has_value() == status.has_value(),
+               "parse outcome is not deterministic");
     FUZZ_CHECK(again.Positional() == parser.Positional(),
                "positional arguments are not deterministic");
     for (const ArgSpec& spec : kSpecs) {
@@ -172,25 +173,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
         const std::string value = parser.GetString(spec.name);
         switch (spec.kind) {
-        case ArgKind::Flag:
-            // Property 4: `--mine`, `--mine=yes` and `--no-mine=0` must all
-            // collapse to the same two spellings, or downstream code that reads
-            // the raw string would see spurious distinctions.
-            FUZZ_CHECK(value == "0" || value == "1", "flag stored something other than 0 or 1");
-            FUZZ_CHECK(parser.GetBool(spec.name) == (value == "1"),
-                       "GetBool disagrees with the stored flag");
-            break;
-        case ArgKind::Integer:
-            // Property 5: Parse and GetInt must use the same acceptance rule.
-            // Two different fallbacks can only agree if neither was needed.
-            FUZZ_CHECK(parser.GetInt(spec.name, std::numeric_limits<int64_t>::min()) ==
-                           parser.GetInt(spec.name, std::numeric_limits<int64_t>::max()),
-                       "Parse accepted an integer GetInt cannot re-read");
-            [[fallthrough]];
-        case ArgKind::String:
-            // Property 6.
-            FUZZ_CHECK(IsSuffixOfSomeField(fields, value), "stored value is not present in argv");
-            break;
+            case ArgKind::Flag:
+                // Property 4: `--mine`, `--mine=yes` and `--no-mine=0` must all
+                // collapse to the same two spellings, or downstream code that reads
+                // the raw string would see spurious distinctions.
+                FUZZ_CHECK(value == "0" || value == "1", "flag stored something other than 0 or 1");
+                FUZZ_CHECK(parser.GetBool(spec.name) == (value == "1"),
+                           "GetBool disagrees with the stored flag");
+                break;
+            case ArgKind::Integer:
+                // Property 5: Parse and GetInt must use the same acceptance rule.
+                // Two different fallbacks can only agree if neither was needed.
+                FUZZ_CHECK(parser.GetInt(spec.name, std::numeric_limits<int64_t>::min()) ==
+                               parser.GetInt(spec.name, std::numeric_limits<int64_t>::max()),
+                           "Parse accepted an integer GetInt cannot re-read");
+                [[fallthrough]];
+            case ArgKind::String:
+                // Property 6.
+                FUZZ_CHECK(IsSuffixOfSomeField(fields, value),
+                           "stored value is not present in argv");
+                break;
         }
     }
 

@@ -44,6 +44,7 @@ void BM_ToHex(benchmark::State& state) {
     }
     state.SetBytesProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_ToHex)->Arg(250)->Arg(4096)->Arg(1 << 20);
 
 void BM_FromHex(benchmark::State& state) {
@@ -54,6 +55,7 @@ void BM_FromHex(benchmark::State& state) {
     }
     state.SetBytesProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_FromHex)->Arg(250)->Arg(4096)->Arg(1 << 20);
 
 /// Per-hash cost. This is the figure that matters for responses listing thousands
@@ -67,17 +69,18 @@ void BM_Hash256ToHex(benchmark::State& state) {
     }
     state.SetItemsProcessed(state.iterations());
 }
+
 BENCHMARK(BM_Hash256ToHex);
 
 void BM_Hash256FromHex(benchmark::State& state) {
-    const std::string hex =
-        amarian::Hash256::FromBytes(MakeBytes(amarian::Hash256::SIZE)).ToHex();
+    const std::string hex = amarian::Hash256::FromBytes(MakeBytes(amarian::Hash256::SIZE)).ToHex();
     for ([[maybe_unused]] auto iteration : state) {
         std::optional<amarian::Hash256> parsed = amarian::Hash256FromHex(hex);
         benchmark::DoNotOptimize(parsed);
     }
     state.SetItemsProcessed(state.iterations());
 }
+
 BENCHMARK(BM_Hash256FromHex);
 
 /// The rejection path, measured separately: an RPC endpoint under garbage load
@@ -93,6 +96,7 @@ void BM_FromHexRejectLate(benchmark::State& state) {
     }
     state.SetBytesProcessed(state.iterations() * state.range(0));
 }
+
 BENCHMARK(BM_FromHexRejectLate)->Arg(4096)->Arg(1 << 20);
 
 }  // namespace

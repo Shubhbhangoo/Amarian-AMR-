@@ -25,7 +25,9 @@ void Print(const std::string& text) {
 }
 
 void RegisterOptions(ArgsParser& parser) {
-    parser.Add({.name = "help", .kind = ArgKind::Flag, .help = "Show this help and exit.",
+    parser.Add({.name = "help",
+                .kind = ArgKind::Flag,
+                .help = "Show this help and exit.",
                 .short_name = 'h'});
     parser.Add({.name = "version",
                 .kind = ArgKind::Flag,
@@ -57,8 +59,10 @@ bool ConfigureLogging(const ArgsParser& parser) {
         const std::string name = parser.GetString("log-level");
         log::Level level{};
         if (!log::ParseLevel(name, &level)) {
-            std::fprintf(stderr, "amariand: unknown --log-level '%s' (expected error, warn, info, debug or trace)\n",
-                         name.c_str());
+            std::fprintf(
+                stderr,
+                "amariand: unknown --log-level '%s' (expected error, warn, info, debug or trace)\n",
+                name.c_str());
             return false;
         }
         log::SetLevel(level);
@@ -69,8 +73,10 @@ bool ConfigureLogging(const ArgsParser& parser) {
         std::string unknown;
         const uint32_t mask = log::ParseCategories(csv, &unknown);
         if (!unknown.empty()) {
-            std::fprintf(stderr, "amariand: unknown log category '%s' (known: %s, all, none)\n",
-                         unknown.c_str(), log::CategoryNames().c_str());
+            std::fprintf(stderr,
+                         "amariand: unknown log category '%s' (known: %s, all, none)\n",
+                         unknown.c_str(),
+                         log::CategoryNames().c_str());
             return false;
         }
         log::DisableCategories(log::ToBits(log::Category::All));
@@ -115,8 +121,8 @@ int Run(int argc, char* argv[]) {
     }
 
     if (!parser.Positional().empty()) {
-        std::fprintf(stderr, "amariand: unexpected argument '%s'\n",
-                     parser.Positional().front().c_str());
+        std::fprintf(
+            stderr, "amariand: unexpected argument '%s'\n", parser.Positional().front().c_str());
         return EXIT_USAGE;
     }
 

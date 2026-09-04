@@ -1,6 +1,5 @@
-#include <amarian/util/types.hpp>
-
 #include <amarian/util/hex.hpp>
+#include <amarian/util/types.hpp>
 
 #include <algorithm>
 #include <array>

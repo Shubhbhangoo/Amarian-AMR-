@@ -63,7 +63,8 @@ TEST(Hash256, DisplayHexIsByteReversed) {
         bytes[i] = static_cast<uint8_t>(i + 1);
     }
     const Hash256 h = Hash256::FromBytes(bytes);
-    EXPECT_EQ(h.ToHexInternal(), "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+    EXPECT_EQ(h.ToHexInternal(),
+              "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
     EXPECT_EQ(h.ToHex(), "201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201");
 }
 

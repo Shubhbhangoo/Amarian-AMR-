@@ -12,6 +12,7 @@ namespace {
 class LogStateGuard {
 public:
     LogStateGuard() : level_(CurrentLevel()), categories_(EnabledCategories()) {}
+
     LogStateGuard(const LogStateGuard&) = delete;
     LogStateGuard& operator=(const LogStateGuard&) = delete;
     LogStateGuard(LogStateGuard&&) = delete;

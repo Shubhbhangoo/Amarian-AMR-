@@ -21,6 +21,7 @@ public:
     }
 
     [[nodiscard]] int Count() const { return static_cast<int>(pointers_.size()); }
+
     [[nodiscard]] const char* const* Data() const { return pointers_.data(); }
 
 private:

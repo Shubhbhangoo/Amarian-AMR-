@@ -39,7 +39,7 @@ private:
     std::string detail_;
 };
 
-template <typename T>
+template<typename T>
 using Result = std::expected<T, Error>;
 
 using Status = std::expected<void, Error>;
@@ -58,12 +58,12 @@ using Status = std::expected<void, Error>;
 
 /// Propagates a failure from `expr` out of the enclosing function.
 /// Usage: `AMARIAN_TRY(DoThing());` for Status, `auto v = AMARIAN_TRY_VALUE(GetThing());`
-#define AMARIAN_TRY(expr)                                                                          \
-    do {                                                                                           \
-        auto amarian_try_result_ = (expr);                                                          \
-        if (!amarian_try_result_.has_value()) {                                                     \
-            return std::unexpected(std::move(amarian_try_result_).error());                         \
-        }                                                                                          \
+#define AMARIAN_TRY(expr)                                                   \
+    do {                                                                    \
+        auto amarian_try_result_ = (expr);                                  \
+        if (!amarian_try_result_.has_value()) {                             \
+            return std::unexpected(std::move(amarian_try_result_).error()); \
+        }                                                                   \
     } while (false)
 
 }  // namespace amarian
