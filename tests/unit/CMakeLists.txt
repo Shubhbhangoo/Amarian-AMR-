@@ -5,3 +5,8 @@ amarian_add_test(test_util unit
     util_overflow_test.cpp
 )
 target_link_libraries(test_util PRIVATE amarian::util)
+
+amarian_add_test(test_version unit
+    version_test.cpp
+)
+target_link_libraries(test_version PRIVATE amarian::version)

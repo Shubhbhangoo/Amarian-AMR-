@@ -21,3 +21,19 @@ add_library(amarian_util STATIC
 )
 target_link_libraries(amarian_util PUBLIC amarian_settings)
 add_library(amarian::util ALIAS amarian_util)
+
+# --- version: build identity ------------------------------------------------
+# Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
+# its own target so that nothing else acquires a dependency on OpenSSL just to
+# print a version banner.
+add_library(amarian_version STATIC
+    version.cpp
+)
+target_link_libraries(amarian_version PUBLIC amarian_settings PRIVATE amarian::openssl)
+add_library(amarian::version ALIAS amarian_version)
+
+# --- amariand: the node daemon ---------------------------------------------
+add_executable(amariand
+    node/amariand.cpp
+)
+target_link_libraries(amariand PRIVATE amarian::util amarian::version)
