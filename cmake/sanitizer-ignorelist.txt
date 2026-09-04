@@ -1,0 +1,48 @@
+# UBSan ignorelist: which code the "suspicious conversion" checks do not apply to.
+#
+# -fsanitize=integer enables more than undefined behaviour. Alongside the real UB
+# checks it turns on implicit-conversion, which flags conversions that are fully
+# defined by the standard but are usually a mistake — an implicit sign change or a
+# narrowing that loses value. For a consensus validator those are worth failing a
+# build over, so Amarian keeps them on and non-recoverable.
+#
+# They also fire inside libstdc++, on code we do not own and would not change.
+# The concrete case that prompted this file:
+#
+#   /usr/include/c++/15/charconv:531
+#   __from_chars_alnum: const unsigned char __c = __from_chars_alnum_to_val(*__first);
+#
+# from_chars is specified to accept arbitrary bytes and report errc::invalid_argument
+# for anything that is not a digit, so the byte it converts here can legitimately
+# have the high bit set. char -> unsigned char is a well-defined modular conversion
+# ([conv.integral]/2), the value is only used for a range comparison, and the caller
+# in src/util/args.cpp checks both the error code and the end pointer. There is no
+# defect to fix, in libstdc++ or in Amarian.
+#
+# Scope is deliberately narrow. Only the implicit-* checks are relaxed, and only in
+# standard library headers: every memory-safety and genuine-UB check still applies
+# there, because a std::vector or std::optional misuse of ours is reported at a
+# source location inside those same headers. scripts/ubsan_charconv_probe.sh
+# demonstrates that with this file in place the check still fires on our own
+# translation units.
+#
+# Two syntax notes, both established by that probe rather than assumed:
+#   * The section header is a glob over sanitizer names. A comma-separated list
+#     ("[a,b]") matches no sanitizer at all and silently does nothing.
+#   * src: is matched against the path as the compiler saw it, which for libstdc++
+#     under Clang is the GCC-relative
+#     /usr/lib/gcc/x86_64-linux-gnu/15/../../../../include/c++/15/charconv.
+#     An exact absolute path therefore does not match; the glob is required.
+#
+# Clang only. GCC 15 does not accept -fsanitize-ignorelist, and does not implement
+# the implicit-* checks either, so it needs no entry here.
+#
+# Editing this file does not by itself trigger a rebuild: the flag string CMake
+# passes is unchanged, so Ninja sees no new input. Rebuild the affected preset from
+# scratch after changing it.
+
+[implicit-*]
+
+# libstdc++ (also matches include/c++/v1 if libc++ is ever used).
+src:*/include/c++/*
+src:*include/c++/*
