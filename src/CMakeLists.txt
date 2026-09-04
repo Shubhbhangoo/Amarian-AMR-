@@ -23,6 +23,13 @@ add_library(amarian_util STATIC
 target_link_libraries(amarian_util PUBLIC amarian_settings)
 add_library(amarian::util ALIAS amarian_util)
 
+# --- crypto: the sole OpenSSL boundary for consensus hashing ----------------
+add_library(amarian_crypto STATIC
+    crypto/hash.cpp
+)
+target_link_libraries(amarian_crypto PUBLIC amarian::util PRIVATE amarian::openssl)
+add_library(amarian::crypto ALIAS amarian_crypto)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
