@@ -16,6 +16,7 @@
 add_library(amarian_util STATIC
     util/args.cpp
     util/hex.cpp
+    util/serialize.cpp
     util/types.cpp
     util/logging.cpp
 )

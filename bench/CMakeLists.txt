@@ -24,5 +24,6 @@ endfunction()
 amarian_add_bench(bench_util
     util_hex_bench.cpp
     util_overflow_bench.cpp
+    util_serialize_bench.cpp
 )
 target_link_libraries(bench_util PRIVATE amarian::util)

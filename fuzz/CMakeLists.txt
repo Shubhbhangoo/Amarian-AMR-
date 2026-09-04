@@ -42,5 +42,9 @@ endfunction()
 # Attacker-facing: hex arrives from RPC arguments and config files.
 amarian_add_fuzzer(fuzz_hex hex_fuzz.cpp amarian::util)
 
+# Attacker-facing, and the widest surface in the project: every byte a node acts
+# on arrives through the Reader.
+amarian_add_fuzzer(fuzz_serialize serialize_fuzz.cpp amarian::util)
+
 # Operator-facing: robustness and no-silent-misinterpretation for the CLI parser.
 amarian_add_fuzzer(fuzz_args args_fuzz.cpp amarian::util)
