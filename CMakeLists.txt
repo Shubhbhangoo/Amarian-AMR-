@@ -16,6 +16,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Amarian uses headers, not C++20 modules. Left on, CMake adds a dependency-scan
+# step per source file and compiles everything with GCC's experimental
+# -fmodules-ts; neither buys anything here, and consensus code should not be built
+# with an experimental front-end mode. Revisit if the project adopts modules.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
