@@ -30,6 +30,18 @@ add_library(amarian_crypto STATIC
 target_link_libraries(amarian_crypto PUBLIC amarian::util PRIVATE amarian::openssl)
 add_library(amarian::crypto ALIAS amarian_crypto)
 
+# --- primitives: consensus data and canonical encodings ---------------------
+add_library(amarian_primitives STATIC
+    primitives/lock.cpp
+    primitives/merkle.cpp
+    primitives/outpoint.cpp
+    primitives/spend_condition.cpp
+    primitives/transaction.cpp
+    primitives/witness.cpp
+)
+target_link_libraries(amarian_primitives PUBLIC amarian::crypto)
+add_library(amarian::primitives ALIAS amarian_primitives)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
