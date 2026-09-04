@@ -93,6 +93,16 @@
       }
     },
     {
+      "name": "bench-clang",
+      "displayName": "bench-clang (second compiler; codegen differences are real)",
+      "inherits": "clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "AMARIAN_BUILD_TESTS": "OFF",
+        "AMARIAN_BUILD_BENCH": "ON"
+      }
+    },
+    {
       "name": "release",
       "displayName": "release (gcc, Release, no tests)",
       "inherits": "gcc",
@@ -110,6 +120,7 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "fuzz", "configurePreset": "fuzz" },
     { "name": "bench", "configurePreset": "bench" },
+    { "name": "bench-clang", "configurePreset": "bench-clang" },
     { "name": "release", "configurePreset": "release" }
   ],
   "testPresets": [
@@ -122,6 +133,12 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "clang-dev",
+      "configurePreset": "clang-dev",
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" }
     },
