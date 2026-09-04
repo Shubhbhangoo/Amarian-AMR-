@@ -1,0 +1,37 @@
+# Build output
+build/
+out/
+.cache/
+compile_commands.json
+
+# Local node data directories
+.amarian/
+data/
+datadir*/
+regtest-*/
+testnet-*/
+.tmp/
+tmp/
+
+# Fuzzing corpora & crash artifacts. Reproducible crashes get promoted into
+# tests/vectors/ as explicit regression cases instead of living here.
+fuzz/corpus/
+fuzz/crashes/
+fuzz/artifacts/
+
+# Toolchain / editor noise
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+core
+vgcore.*
+perf.data*
+callgrind.out.*
+
+# Per-developer agent/tool state. Shared project rules belong in CLAUDE.md, which
+# is tracked; local permission grants are machine-specific and are not.
+.claude/settings.local.json

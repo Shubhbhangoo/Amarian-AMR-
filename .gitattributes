@@ -1,0 +1,23 @@
+# Amarian repository attributes
+# The canonical repository encoding is UTF-8 with LF line endings on every platform.
+# Consensus test vectors are byte-exact; CRLF translation would corrupt them.
+
+* text=auto eol=lf
+
+*.cpp   text eol=lf
+*.hpp   text eol=lf
+*.h     text eol=lf
+*.cmake text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# Byte-exact fixtures: never translate, never diff as text.
+tests/vectors/**  -text -diff
+fuzz/corpus/**    -text -diff
+*.bin             binary
+*.dat             binary
+*.blk             binary
