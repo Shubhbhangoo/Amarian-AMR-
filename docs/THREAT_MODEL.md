@@ -1,0 +1,344 @@
+# Threat model
+
+## What this document is, and what it is not
+
+This is a threat model written at Phase 0, which means it is a **specification of
+what must be defended**, not a report of what has been defended. Every defence
+below is labelled with the phase that implements it and whether a test exists. At
+the time of writing, the honest answer to "is this defended?" is *no* for almost
+everything here, because there is no consensus code yet.
+
+That is the point of writing it now. An enumeration of attack classes produced
+*after* the code exists is an enumeration of the attacks the code happens to
+stop. This one is meant to be the input to
+[Phase 9](ROADMAP.md#phase-9--security-engineering), whose acceptance criterion is
+that every class listed here has a regression test that fails if the defence is
+removed.
+
+For how to report something found in the code, see
+[../SECURITY.md](../SECURITY.md). This document is about the design.
+
+## What is being protected
+
+Ranked, because ranking is what makes trade-offs decidable when two properties
+conflict.
+
+| # | Property | What breaking it costs |
+|---|---|---|
+| 1 | **Supply integrity** — no more than 83 999 999 932 170 000 facets ever exist, on the schedule in [ECONOMICS.md](ECONOMICS.md) | The one thing the project exists to provide. Unrecoverable: a chain that has silently over-issued cannot un-issue. |
+| 2 | **Spend authorisation** — coins move only with the authorisation their lock demands | Theft. Also unrecoverable for the victim. |
+| 3 | **Determinism and convergence** — every honest node with the same data reaches the same conclusion, and honest nodes converge on one best chain | A permanent split is two incompatible histories. Both halves believe they are correct, which is worse than either being wrong. |
+| 4 | **Node availability** — an honest operator can run a validating node on ordinary hardware and stay in sync | Decentralisation is the ability to verify for yourself. If that becomes expensive, verification centralises and properties 1–3 stop being checkable by the people relying on them. |
+| 5 | **Privacy** | Real harm, but a privacy failure does not destroy the monetary system. Deliberately last, and deliberately not claimed as a feature. |
+
+Ordering matters in practice. If a change would improve throughput at the cost of
+determinism, it does not happen. If a policy rule improves privacy but makes a
+consensus rule ambiguous, it does not happen.
+
+## The adversary
+
+Rather than one imagined attacker, a ladder of capabilities. Each rung is assumed
+to be freely available to whoever is attacking.
+
+| Capability | Assumed available | Notes |
+|---|---|---|
+| Send arbitrary bytes to any node's P2P port | Yes | Not a hypothetical: this is the normal operating condition. |
+| Run many nodes and many identities | Yes | Identities are free. Sybil resistance comes from work, never from counting peers. |
+| Choose transaction contents, sizes, structure, ordering, and timing | Yes | Including contents chosen specifically to make validation expensive. |
+| Craft any byte string as a block, transaction, or message | Yes | Including structurally valid data with adversarial values, which is the harder case than garbage. |
+| Delay, drop, reorder, or duplicate messages between others | Yes, partially | Assumed for a targeted victim; not assumed globally and permanently. |
+| Substantial but minority hashrate | Yes | Up to just under 50%. Selfish mining and short reorganisations are in scope. |
+| Majority hashrate | **Assumed not available** | See [accepted risks](#accepted-risks-and-explicit-non-goals). This is proof of work's foundational assumption, not a bug in this implementation. |
+| Quantum computer able to run Shor's algorithm on secp256k1 | **Assumed not available yet** | The design goal is that the arrival date does not need to be predicted. See [PQ_CRYPTO.md](PQ_CRYPTO.md). |
+| Read or write the operator's disk, memory, or keys | **Out of scope** | An attacker already inside the machine has won by definition. |
+
+The rung that deserves emphasis is "structurally valid data with adversarial
+values". Malformed garbage is caught by a parser and is the easy case; a
+well-formed transaction whose amounts are chosen so that a sum wraps is caught only
+by a rule that was written on purpose.
+
+## Where untrusted data enters
+
+Four boundaries, and it is worth being explicit that the *first* one is the one
+people forget:
+
+1. **The P2P socket.** Blocks, transactions, headers, addresses, and every protocol
+   message. Phase 4.
+2. **The RPC interface.** Semi-trusted — an operator's own request — but reachable
+   from a browser via cross-origin requests if it is bound carelessly, so it is
+   treated as untrusted input with an authentication layer in front. Phase 11.
+3. **The command line, config file and data directory.** Trusted in the sense that
+   the operator supplied them, which is why a crash here is Low severity rather
+   than High, but still parsed defensively. This exists today, and
+   [fuzz/args_fuzz.cpp](../fuzz/args_fuzz.cpp) fuzzes it.
+4. **Anything read back from disk.** A database file is not a trusted input: it may
+   have been corrupted by a power failure, a failing disk, or a previous version of
+   the software with a bug. Phase 1 onward.
+
+The rule that follows is that **deserialisation is the security perimeter**. Every
+parser is a place where an attacker chooses the bytes, so each one gets a fuzz
+harness rather than a review. Two exist today ([fuzz/README.md](../fuzz/README.md));
+the number grows with each phase that adds a parser.
+
+## Attack classes
+
+Each table row is intended to become a named test. The **Phase** column is where
+the defence is implemented; **Tested** is the current honest state.
+
+### 1. Supply integrity
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 2 | no |
+| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | no |
+| Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | no |
+| Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 2 | no |
+| Negative amount | A signed amount below zero | Amounts are validated on deserialisation, not at point of use | 2 | no |
+| Duplicate coinbase | Two coinbase transactions in one block | Exactly one, at index 0 | 2 | no |
+| Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | no |
+| Duplicate transaction id | Re-mining an existing txid to overwrite or resurrect a UTXO (BIP-30 / BIP-34 class) | Height committed in the header, so identical coinbases across heights are impossible by construction | 1 | no |
+| Tail emission added later | A "temporary" subsidy to fund security | Not a code defence. The cap is enforced per-block from height, so adding one is a hard fork that every node must accept — the social defence is that it is impossible to do quietly | — | n/a |
+
+The last row is not padding. Most supply failures in practice are not exploits;
+they are decisions. The mechanism that stops it is that the schedule is a pure
+function of height with no parameters an operator can set.
+
+### 2. Spend authorisation
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Forged signature | A signature that verifies without the key | Not Amarian's to defend — libsecp256k1 and OpenSSL. Amarian's job is calling them correctly | 1, 6 | no |
+| Signature malleability | A second encoding of the same signature, giving a second valid txid | BIP-340 signatures are fixed 64 bytes with no encoding freedom; ML-DSA signatures are fixed-length; any variable-length encoding must be checked canonical on parse, not on use | 1, 6 | no |
+| Signature reuse across contexts | A signature valid for one transaction accepted for another | Sighash commits to inputs, outputs, the spent amount, the spend condition, and a network-specific `chain_id` | 1 | no |
+| Cross-chain replay | A mainnet transaction replayed on testnet or vice versa | `chain_id` in the sighash preimage, distinct per network | 1 | no |
+| Cross-input replay | A signature for input 0 accepted for input 1 | The input index is in the preimage | 1 | no |
+| Wrong-key substitution | Spending with a key that is not the one committed to | Lock commits to a hash of the whole `SpendCondition`; the revealed condition is hashed and compared before any signature is checked | 1 | no |
+| Threshold bypass | Satisfying a 2-of-3 with one signature counted twice | Each satisfied key counted at most once; duplicate keys in a condition rejected at construction | 1 | no |
+| Hash collision on a lock | Two spend conditions with the same commitment | 256-bit commitment; also why the commitment is domain-separated from every other hash use | 1 | no |
+| Domain confusion | A hash from one context accepted in another | Tagged hashing throughout, with the tag part of the preimage | 1 | no |
+| Quantum key recovery from an exposed key | Shor's algorithm on a published public key | Locks commit to a hash, never a key; post-quantum schemes available from the first block. The mempool window is residual and acknowledged | 1, 6 | no |
+
+The malleability row is the one worth dwelling on. A signature that fails to verify
+is a non-event; a *second valid encoding* of a signature that does verify changes
+the transaction id, which breaks anything that referenced it. This is the class of
+bug that is invisible in a "does it verify?" test and is exactly why
+[Phase 6](ROADMAP.md#phase-6--post-quantum-integration)'s criterion has a rejection
+half.
+
+### 3. Determinism and convergence
+
+This class has no exploit column, because the attack is usually not an attack. It
+is a node behaving differently from another node for a reason nobody intended, and
+an adversary who *notices* it first gets to choose which half of the network sees
+which chain.
+
+| Non-determinism source | Why it splits a chain | Defence |
+|---|---|---|
+| Wall-clock time in a validation rule | Two nodes validate at different instants | Consensus functions take data as arguments and read no clock. Timestamps are validated as *data*, against the header chain, never against local time except for a bounded far-future rule |
+| Uninitialised memory | Same input, different result, per run | Sanitizer presets that fail rather than warn; MSan available |
+| Hash-map or set iteration order | Ordering feeds a hash or a decision | Ordered containers in anything consensus-visible; a `#include <unordered_map>` in `consensus/` is a review stop |
+| Floating point | Rounding differs by platform, compiler flags, and library version | No monetary or consensus value is ever floating point. Integer base units only |
+| Locale | Case, collation and number formatting differ per environment | No locale-dependent function in a consensus path |
+| Signed overflow | Undefined behaviour lets the optimiser delete the check | `-fwrapv`, plus checked arithmetic that returns `std::optional` so an overflowed value cannot be read unknowingly |
+| Compiler or optimisation level | The same source produces different behaviour | Every rule is a pure function of committed data. Verified in practice by building the full matrix under GCC and Clang, Debug and Release, with sanitizers |
+| Platform integer width or endianness | Serialisation differs by host | Fixed-width types and explicit little-endian encoding; two byte orders in `Hash256` separated in the type's API so they cannot be confused |
+| Storage or cache state | A validation outcome depends on what is cached | Structural: consensus does not link storage. Enforced by the build, not by review |
+| Network state | An outcome depends on which peer answered first | Structural: consensus does not link networking |
+
+The last two are the reason the layering rule in
+[ARCHITECTURE.md](ARCHITECTURE.md) is enforced by the linker rather than by
+convention. A reviewer can miss an `#include`; a link error cannot be missed.
+
+### 4. Proof of work and chain selection
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Invalid work accepted | A header whose hash does not meet its target | Target recomputed from the header chain, never taken from the block | 1 | no |
+| Compact target manipulation | A `target_bits` encoding with a negative or overflowing mantissa, or a non-canonical encoding of the same target | Bounds-checked decode plus a canonical-form check; a target above the network maximum rejected | 1 | no |
+| Difficulty manipulation by timestamps | Backdated or forward-dated headers to make the next target easier | ASERT retargeting on every block rather than on a window boundary, removing the boundary that Bitcoin's timewarp exploits; timestamps bounded relative to median-time-past and to a far-future limit | 3 | no |
+| Timewarp | Repeatedly rewinding timestamps across a retarget boundary to drive difficulty down | Per-block retarget plus a monotonicity constraint on median-time-past. The specific rule gets simulation evidence in Phase 3, not an appeal to precedent | 3 | no |
+| Low-difficulty chain flood | Thousands of cheap headers to exhaust memory or CPU | Headers-first sync with work checked before storage; a header chain must demonstrate more work than the current tip before its blocks are requested | 4 | no |
+| Selfish mining | Withholding blocks to waste honest work | Not preventable at minority hashrate; the defence is that it is unprofitable below a threshold, and that chain selection is on accumulated work rather than on block count or arrival time | 3 | no |
+| Deep reorganisation | Rewriting confirmed history | Cost is the work in the rewritten span. Confirmation counts are a user-facing risk statement, not a consensus rule. Coinbase maturity of 200 blocks is set against this | 2, 3 | no |
+| Reorganisation without hashrate | A bug allowing a lower-work chain to win | This is the actual bug to hunt: chain selection must be a total order on accumulated work with deterministic tie-breaking | 1 | no |
+| Difficulty oscillation on a young chain | Hashrate arriving and leaving faster than the retarget adapts | ASERT's exponential response, parameterised with simulation evidence. Acknowledged as the most fragile part of a new chain | 3 | no |
+
+The distinction in that table between "selfish mining" and "reorganisation without
+hashrate" is the one that matters. The first is an economic problem inherent to
+proof of work and is an accepted risk. The second is a software defect and is
+Critical.
+
+### 5. Resource exhaustion
+
+Every row here is a case where the *cost to the attacker* and the *cost to the
+victim* are asymmetric, which is the only thing that makes a denial of service
+worth doing.
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Quadratic validation cost | A transaction whose signature hashing grows with the square of its size (Bitcoin's pre-SegWit sighash flaw) | Sighash midstate reuse so each input's preimage is linear; committed to in the design before the format is fixed rather than patched later | 1 | no |
+| Expensive-to-validate block | A block filled with maximally costly inputs | Weight limit bounds size; measured per-block verification CPU for post-quantum schemes is 0.064–0.113 s against a 300 s interval, so the current parameters have four orders of magnitude of headroom | 1, 6 | no |
+| Memory exhaustion on deserialisation | A length prefix declaring a gigabyte | Every length checked against the remaining buffer *before* allocation, never against a constant alone | 1 | no |
+| Deeply nested or recursive structure | Blowing the stack during parsing | Structures are flat by design; no recursive descent in consensus deserialisation | 1 | no |
+| Mempool flooding | Cheap transactions to fill memory | Minimum relay fee, mempool size cap with fee-based eviction, per-peer rate limits. Policy, not consensus | 4 | no |
+| UTXO set bloat | Many tiny outputs to grow every node's state permanently | Dust threshold as relay policy. Not a consensus rule, because a consensus rule on output size cannot be relaxed later | 4 | no |
+| Address or inventory flooding | Millions of announcements | Bounded caches with random eviction, and rate limits per peer | 4 | no |
+| Connection exhaustion | Occupying every inbound slot | Inbound slot limits, eviction preferring peers that have provided useful data | 4 | no |
+| Bandwidth amplification | Requesting the same large data repeatedly | Per-peer request accounting and ban scoring | 4 | no |
+
+The quadratic-sighash row is deliberately first. It is the clearest historical
+example of a denial-of-service vector baked into a transaction format, discovered
+after the format could no longer be changed. Getting it right requires deciding it
+in Phase 1, which is why the sighash design is fixed before the serialisation is.
+
+### 6. Network layer
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Eclipse | Occupying all of a victim's connections to control its view | Diversity requirements on outbound peers across address groups, anchor connections persisted across restarts, and outbound selection never driven solely by peer-supplied addresses | 4 | no |
+| Sybil | Many identities to appear as many independent peers | Identities are free and counting them is meaningless; every security decision is on work, never on peer agreement | 4 | no |
+| Partition | Splitting the network into halves that cannot see each other | Cannot be prevented, only detected and survived. Convergence after a deliberate fork is an explicit acceptance criterion of Phase 4, not an assumption | 4 | no |
+| Address poisoning | Filling a victim's address database with attacker-controlled entries | Bucketing by network group so one actor cannot dominate, and bounded tables with eviction | 4 | no |
+| Transaction origin inference | Correlating first-broadcast to deanonymise | Randomised relay delays. Improves privacy; explicitly not a strong anonymity claim | 4 | no |
+| Block withholding to a target | Delaying a victim's view of the tip | Multiple peers, headers-first sync, and a stall timeout that disconnects a peer failing to deliver | 4 | no |
+| Protocol downgrade | Negotiating a weaker version or feature set | Minimum supported version enforced at handshake; no negotiable security feature | 4 | no |
+
+### 7. Wallet
+
+Wallet failures do not threaten the network, and the layering makes that structural
+rather than aspirational: a wallet bug can lose its owner's coins and cannot change
+what any node accepts.
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Weak key generation | Predictable randomness | OS CSPRNG via OpenSSL, never a user-supplied or time-seeded source | 5 | no |
+| Nonce reuse in signing | Two signatures with the same nonce reveal the key | BIP-340's deterministic nonce derivation, from libsecp256k1's own implementation | 5 | no |
+| Backup that does not restore | A file written but never verified | The Phase 5 criterion is tested by restoring from the backup, not by writing it | 5 | no |
+| Address reuse | Publishing a key repeatedly, growing quantum and privacy exposure | The wallet makes reuse the awkward path rather than merely documenting against it | 5 | no |
+| Change address confusion | Sending change somewhere unrecoverable | Change always to a key derivable from the same seed | 5 | no |
+| Fee overpayment or stuck transaction | Bad estimation | Fee estimation with an explicit override, and a visible fee before confirmation | 5 | no |
+| Amount or recipient display mismatch | The signed transaction differs from what was shown | The confirmation step renders the transaction that will be signed, from the same structure | 5, 11 | no |
+
+### 8. Build and supply chain
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Compromised dependency | A malicious version of a library | Dependencies are few, mature, and system-packaged; versions are recorded in `--build-info` so a binary can be traced to what it was built against | 0 | partial |
+| Undetected local modification | A build from a dirty tree passed off as a release | `amariand --version` prints the commit and marks a modified working tree as such | 0 | **yes** |
+| Non-reproducible release | Two builds of the same commit differing | Not yet addressed. Reproducible builds are Phase 11 work and are listed as an open item, not claimed | 11 | no |
+| Weakened build flags | Hardening silently disabled | Hardening is in a single interface target every other target links, and `--build-info` prints what was actually used | 0 | partial |
+
+"Partial" means the mechanism exists and is visible in output, but no test asserts
+it. That distinction is the reason the column exists.
+
+## Cryptographic agility is itself an attack surface
+
+A mechanism flexible enough to retire a broken signature scheme is flexible enough
+to be abused, and this deserves its own section rather than a table row.
+
+| Attack | Concern |
+|---|---|
+| Malicious activation | A scheme activated that nobody reviewed, or activated on a timeline too short to audit |
+| Coerced migration | UTXOs on a retired scheme made unspendable, which is confiscation regardless of intent |
+| Downgrade | An attacker causing a lock to be satisfiable by a weaker scheme than its owner chose |
+| Activation ambiguity | Two nodes disagreeing about whether a scheme is active — a split, by definition |
+| Emergency abuse | An emergency path, justified by a real break, used for something else |
+
+The design constraints that follow: activation is a consensus rule derived from
+block data, never an operator setting or a signed message from anyone; retirement
+restricts *creating* new locks and never invalidates existing ones, so no UTXO
+becomes unspendable by scheme retirement; and every scheme identifier is explicit,
+so "which scheme is this" is never inferred. Phase 8 has to settle the process, and
+that is the phase's actual content — the mechanism is the easy part.
+
+## Accepted risks and explicit non-goals
+
+Stating these plainly is more useful than a defence that does not exist.
+
+**Majority hashrate.** An adversary with more than half the hashrate can reorganise
+recent history, censor transactions, and double-spend. Proof of work does not defend
+against this; it makes it expensive. **It cannot mint coins beyond the schedule, and
+it cannot spend coins it has no key for** — those remain enforced by every node
+regardless of hashrate. A young chain with little hashrate is genuinely more exposed
+here than an established one, and no design choice in this project changes that.
+
+**A compromised machine.** Malware, a hostile operator, physical access, or a
+compromised OS. If the attacker is inside the machine, they have the keys.
+
+**Traffic analysis by a global observer.** Someone who sees all network traffic can
+correlate broadcasts. Amarian is not an anonymity network and does not claim to be.
+
+**Social engineering.** Users sending coins to the wrong recipient, or being talked
+into revealing a seed phrase. Interface design can reduce this; nothing eliminates
+it.
+
+**Loss of a key.** Self-custody means an irrecoverable key is irrecoverable coins.
+This is a property, not a bug, and it is the reason
+[hybrid authorisation](PQ_CRYPTO.md#the-hybrid-question-is-open) is a genuine
+trade-off rather than a free improvement: it doubles the number of ways to lose
+access.
+
+**Fee revenue after issuance ends.** Whether fees alone can fund the security
+budget is unsolved, for Amarian and for every other proof-of-work chain. See
+[ECONOMICS.md](ECONOMICS.md#fees-after-issuance-ends). Amarian's position is that
+the transition is gradual enough to be observed decades before it matters, not that
+it is solved.
+
+**The 12.5%-per-era schedule has no adversarial history.** A halving has fifteen
+years of it. This is a known risk, recorded in
+[../DEVELOPMENT_STATUS.md](../DEVELOPMENT_STATUS.md).
+
+## Stated assumptions
+
+Every claim in this document holds only if these hold. A report that one of them is
+false is a security report, and a valuable one.
+
+1. **An honest majority of hashrate.** Foundational to proof of work, and the
+   assumption most obviously outside the software's control.
+2. **The cryptographic primitives are secure and correctly implemented.** SHA-256,
+   BIP-340 Schnorr over secp256k1, ML-DSA, SLH-DSA — as implemented by
+   libsecp256k1 and OpenSSL. Amarian implements none of them. The post-quantum
+   assumptions are enumerated separately in
+   [PQ_CRYPTO.md](PQ_CRYPTO.md#stated-assumptions).
+3. **The network is not permanently partitioned.** Temporary partitions are
+   expected and must be survived; a permanent one is two networks.
+4. **Enough independent nodes exist to make verification meaningful.** This is
+   currently **false** — there is no network. It is Phase 4 and Phase 10 work, and
+   until it is true, "decentralised" is not claimed.
+5. **The compiler and standard library are correct.** Mitigated rather than assumed:
+   two compilers, four sanitizers, and a full build matrix, which is why a codegen
+   disagreement between GCC and Clang was found in Phase 0 rather than later.
+6. **The operator's machine is not compromised.** See above.
+
+## Current coverage, stated honestly
+
+| Class | Defence designed | Defence implemented | Regression test |
+|---|---|---|---|
+| Supply integrity | yes | no | no |
+| Spend authorisation | yes | no | no |
+| Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers | no |
+| Proof of work and chain selection | yes | no | no |
+| Resource exhaustion | yes | no | no |
+| Network layer | outline only | no | no |
+| Wallet | outline only | no | no |
+| Build and supply chain | yes | mostly | one, informal |
+| Cryptographic agility | yes | no | no |
+
+Six of nine rows are "no" in every column that matters. That is what Phase 0 of 13
+looks like, and a document claiming otherwise would be the more serious defect.
+
+What exists today that belongs in this table at all: the layering contract enforced
+by the linker, checked arithmetic with `-fwrapv` behind it, hardening flags that
+stay on in Release, five test presets including two sanitizer builds, and two fuzz
+harnesses on the only two parsers that exist. Nothing about consensus, because there
+is no consensus code.
+
+[Phase 9](ROADMAP.md#phase-9--security-engineering) is where every row above
+acquires a test that fails when the defence is removed. Until then this document is
+a plan, and it is labelled as one.
+
+
+
+
+
+
