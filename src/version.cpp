@@ -71,8 +71,15 @@ std::string BuildInfoString() {
     line("target", std::string(AMARIAN_TARGET_SYSTEM) + "/" + AMARIAN_TARGET_PROCESSOR);
     line("hardening", AMARIAN_HARDENING_ENABLED != 0 ? "enabled" : "DISABLED");
 
-    const std::string_view sanitizer = AMARIAN_SANITIZER_STRING;
-    line("sanitizers", sanitizer.empty() ? "none" : sanitizer);
+    // if constexpr, not a runtime conditional: AMARIAN_SANITIZER_STRING is a
+    // compile-time constant, so a runtime branch here leaves dead code that
+    // -Wunreachable-code-aggressive correctly objects to.
+    constexpr std::string_view SANITIZER = AMARIAN_SANITIZER_STRING;
+    if constexpr (SANITIZER.empty()) {
+        line("sanitizers", "none");
+    } else {
+        line("sanitizers", SANITIZER);
+    }
 
     line("libsecp256k1", AMARIAN_SECP256K1_VERSION);
     line("OpenSSL (build)", AMARIAN_OPENSSL_VERSION);
