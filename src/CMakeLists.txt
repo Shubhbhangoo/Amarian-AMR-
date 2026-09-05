@@ -30,6 +30,7 @@ add_library(amarian::util ALIAS amarian_util)
 # place cryptography happens.
 add_library(amarian_crypto STATIC
     crypto/hash.cpp
+    crypto/random.cpp
     crypto/signature.cpp
 )
 target_link_libraries(amarian_crypto
@@ -141,14 +142,24 @@ target_link_libraries(amarian_storage
 add_library(amarian::storage ALIAS amarian_storage)
 
 # --- rpc: the operations a client can ask a node to perform -------------------
-# The typed half of the JSON-RPC surface, and nothing else: no socket, no port, no
-# thread, no authentication. That split is the point. `submitblock` must run a submitted
-# block through exactly the validation an arriving block gets, and `getblocktemplate`
-# must describe exactly the block this node would mine — both are properties of function
-# calls, and keeping them in a target with no transport in it is what lets them be
-# exercised as function calls. The listener is where binding, authentication and request
-# framing live, and it is a different target for the same reason: a bug in either half
-# should not need the other half to be understood.
+# The typed half of the JSON-RPC surface plus everything the transport decides about a
+# request — and no socket, no port and no thread. That split is the point, and it is drawn
+# where it is because of what each half can be wrong about.
+#
+# `submitblock` must run a submitted block through exactly the validation an arriving block
+# gets, and `getblocktemplate` must describe exactly the block this node would mine. Both are
+# properties of function calls, so they live in a target with no transport in it and are
+# exercised as function calls.
+#
+# Framing, screening and the cookie are here for the same reason rather than the opposite one:
+# whether a request is refused, and on what evidence, is a property of its bytes. A DNS-rebound
+# browser request and a legitimate miner's request differ in a header, not in a socket, so the
+# check that tells them apart is testable without one and belongs next to the code it guards.
+# What is left for the listener target is reading, writing, and closing.
+#
+# amarian::crypto is PRIVATE and only the cookie needs it: 32 bytes from the platform CSPRNG.
+# Naming it here rather than reaching for OpenSSL directly is what keeps `amarian::crypto` the
+# sole cryptographic boundary even when the layer that needs randomness is the top one.
 #
 # amarian::json is PUBLIC because the method results *are* `nlohmann::json` values, so a
 # caller cannot use this header without it. That is only tolerable here: rpc is a top
@@ -157,9 +168,11 @@ add_library(amarian::storage ALIAS amarian_storage)
 # "JSON-RPC serialisation only (never consensus)".
 add_library(amarian_rpc STATIC
     rpc/dispatch.cpp
+    rpc/http.cpp
 )
 target_link_libraries(amarian_rpc
     PUBLIC amarian::chain amarian::mining amarian::mempool amarian::json
+    PRIVATE amarian::crypto
 )
 add_library(amarian::rpc ALIAS amarian_rpc)
 
