@@ -24,10 +24,18 @@ target_link_libraries(amarian_util PUBLIC amarian_settings)
 add_library(amarian::util ALIAS amarian_util)
 
 # --- crypto: the sole OpenSSL boundary for consensus hashing ----------------
+# Also the sole libsecp256k1 boundary, and the only layer permitted to call either.
+# Both are PRIVATE so that a target linking amarian::crypto gets Amarian's interface
+# and not OpenSSL's headers: a caller that could reach EVP directly would be a second
+# place cryptography happens.
 add_library(amarian_crypto STATIC
     crypto/hash.cpp
+    crypto/signature.cpp
 )
-target_link_libraries(amarian_crypto PUBLIC amarian::util PRIVATE amarian::openssl)
+target_link_libraries(amarian_crypto
+    PUBLIC amarian::util
+    PRIVATE amarian::openssl amarian::secp256k1
+)
 add_library(amarian::crypto ALIAS amarian_crypto)
 
 # --- primitives: consensus data and canonical encodings ---------------------
