@@ -162,6 +162,17 @@ enum class ActivationError : uint8_t {
     /// The plan named a block to reverse that is not the tip, or a fork point outside the
     /// active chain. The index and the active chain disagree about what is applied.
     ChainOutOfStep,
+
+    /// A `ChainSink` refused to make a tip durable. The in-memory chain and the stored one
+    /// have parted company, so continuing would advance a tip that a restart would not
+    /// find — which is worse than stopping, because the coins set on disk would then
+    /// describe a chain the node no longer believes in.
+    CommitFailed,
+
+    /// Storage reported a fault while a block was being judged, so the verdict cannot be
+    /// attributed to the block. Stopping is the only safe reaction: see `ChainSink::HasFault`
+    /// for why the alternative — recording the rejection — is unrecoverable.
+    StorageFaulted,
 };
 
 [[nodiscard]] std::string_view Describe(ActivationError error) noexcept;
@@ -174,6 +185,73 @@ struct ActivationFailure {
     /// Set only for `RevertRejected`, where the distinction between a coin that is missing
     /// and one that is present but different is the difference between two kinds of damage.
     std::optional<utxo::DisconnectError> revert;
+};
+
+/// Where the chain's state is made durable.
+///
+/// Two calls, and the split between them is the whole design. A header record is a fact
+/// about a block the node has *learned*; a tip record is a fact about which chain the node
+/// *follows*. Losing the first costs a re-download. Losing the second, or writing half of
+/// it, is the corruption every other guard in this file exists to prevent.
+///
+/// So `CommitTip` is required to be atomic and `CommitHeader` is not. A node interrupted
+/// between the coins changes and the tip pointer would come back holding a set that
+/// describes neither the chain it left nor the one it was moving to, and no later code
+/// could tell which — there is no record of what was half-applied. The two facts must
+/// therefore land together or not at all. Whether an implementation achieves that with a
+/// write batch, a journal, or a rename is its own business; that it achieves it is the
+/// contract, and `ChainState` relies on it.
+///
+/// Failure of `CommitTip` is a hard stop rather than something to retry or ignore: a node
+/// that carried on after a refused tip commit would be advancing a tip a restart will not
+/// find, which is the one state from which no correct continuation exists. A refused
+/// `CommitHeader` is not reported at all, because `AcceptBlock`'s errors are statements
+/// about the block and this one would be a statement about the disk — and the disk will say
+/// it again, fatally, at the next tip commit.
+class ChainSink {
+public:
+    ChainSink() = default;
+    ChainSink(const ChainSink&) = default;
+    ChainSink(ChainSink&&) = default;
+    ChainSink& operator=(const ChainSink&) = default;
+    ChainSink& operator=(ChainSink&&) = default;
+    virtual ~ChainSink() = default;
+
+    /// Records `entry`'s header and everything the index has decided about it — its arrival
+    /// order, how far it has been validated, and whether it has been ruled out.
+    ///
+    /// Arrival order is stored rather than recomputed because it is half of the chain
+    /// selection rule. A node that renumbered its headers on restart would break ties
+    /// between equal-work branches differently after a restart than before one, which is a
+    /// node changing its mind about which chain is real for no reason an observer could see.
+    [[nodiscard]] virtual bool CommitHeader(const BlockIndexEntry& entry) = 0;
+
+    /// Persists everything in `changes` together with the fact that the active tip is now
+    /// `tip`, atomically, and empties `changes`.
+    ///
+    /// `changes` is passed by mutable reference because flushing it is how it is consumed:
+    /// on success the layer is empty and the sink holds what it held. On failure the sink
+    /// must be unchanged, and `changes` may be left as it was — the caller is stopping
+    /// either way.
+    [[nodiscard]] virtual bool CommitTip(utxo::CoinsCache& changes, const Hash256& tip) = 0;
+
+    /// Whether the storage behind this sink has reported a fault since it was opened.
+    ///
+    /// This exists because the read interfaces below the chain layer — `utxo::CoinsView`,
+    /// `BlockStore` — answer with an `optional` and have nowhere to put "I could not tell
+    /// you". Absent and unreadable therefore look identical to a validator, and a coin that
+    /// exists but could not be read makes a valid block look like a double spend.
+    ///
+    /// That confusion has to be resolved *before* a rejection is recorded, because recording
+    /// one is irreversible and is written to disk: a transient read error would otherwise
+    /// permanently rule out a valid block and every descendant of it, on this node only,
+    /// across every future restart. So a rejection reached while storage is faulted is not
+    /// attributed to the block — activation stops, and the block is judged again on a run
+    /// where the disk answers.
+    ///
+    /// Defaulted to false rather than left pure. A sink with no storage under it has no
+    /// faults to report, and that is an answer rather than a stub.
+    [[nodiscard]] virtual bool HasFault() const { return false; }
 };
 
 /// The active chain, the coins set that corresponds to it, and the operations that move
@@ -215,6 +293,25 @@ public:
     /// The applied tip. Never null.
     [[nodiscard]] const BlockIndexEntry& Tip() const noexcept;
 
+    /// Directs every change of recorded state through `sink`, which must outlive this state.
+    ///
+    /// Optional, and its absence is not a stub: a state with no sink is a complete in-memory
+    /// chain, which is what a test wants and what a node that has not been told where to
+    /// keep its data has. Attaching one does not retroactively persist anything, so it
+    /// belongs immediately after construction and before the first `AcceptBlock`.
+    void PersistTo(ChainSink& sink) noexcept { sink_ = &sink; }
+
+    /// Restores the active chain as the path from genesis up to `tip`, applying nothing.
+    ///
+    /// For a node starting on a set that a previous run already advanced. The coins set this
+    /// state was constructed with must be the set *as of* `tip`, which is exactly what a
+    /// `CommitTip` of that tip left behind — the atomicity of that call is what makes this
+    /// assumption safe to make rather than merely hopeful.
+    ///
+    /// Cannot fail: every entry's ancestry reaches genesis by the index's own invariant, so
+    /// there is always a path to walk.
+    void ResumeAt(const BlockIndexEntry& tip);
+
     /// Takes a block this node has received: indexes its header, checks the body against
     /// every rule that does not need a chain, and stores it.
     ///
@@ -251,10 +348,22 @@ private:
     /// Reverses the current tip.
     [[nodiscard]] std::expected<void, ActivationFailure> DisconnectTip(ActivationSummary& summary);
 
+    /// Makes the current tip durable, if there is a sink. False means the commit was refused
+    /// and the caller must stop.
+    [[nodiscard]] bool CommitCurrentTip();
+
+    /// Records `entry` in the sink, if there is one. False means the write was refused.
+    [[nodiscard]] bool CommitEntry(const BlockIndexEntry& entry);
+
+    /// Whether storage has reported a fault, so that a rejection cannot be blamed on the
+    /// block that appeared to cause it. See `ChainSink::HasFault`.
+    [[nodiscard]] bool StorageFaulted() const;
+
     BlockIndex* index_;
     utxo::CoinsCache* coins_;
     BlockStore* store_;
     const ChainParams* params_;
+    ChainSink* sink_ = nullptr;
     ActiveChain chain_;
 };
 

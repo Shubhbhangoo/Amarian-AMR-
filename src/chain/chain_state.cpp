@@ -55,6 +55,10 @@ std::string_view Describe(ActivationError error) noexcept {
             return "reversing a block disagreed with the unspent output set";
         case ActivationError::ChainOutOfStep:
             return "the block index and the active chain disagree about what is applied";
+        case ActivationError::CommitFailed:
+            return "the new tip could not be made durable";
+        case ActivationError::StorageFaulted:
+            return "storage reported a fault, so a block's verdict cannot be trusted";
     }
     // Unreachable: the switch is total, and -Wswitch-enum makes a new enumerator a build
     // failure here rather than a silent fall-through.
@@ -72,6 +76,35 @@ const BlockIndexEntry& ChainState::Tip() const noexcept {
     // reverses down to a fork point, a fork point is a common ancestor, and genesis is an
     // ancestor of every entry the index holds.
     return *chain_.blocks_.back();
+}
+
+void ChainState::ResumeAt(const BlockIndexEntry& tip) {
+    // Walk up by parent links and reverse, rather than by `Ancestor(h)` per height, which
+    // would make restoring a chain of n blocks cost n^2/2 parent steps.
+    std::vector<const BlockIndexEntry*> upwards;
+    upwards.reserve(size_t{tip.height} + 1);
+    for (const BlockIndexEntry* entry = &tip; entry != nullptr; entry = entry->parent) {
+        upwards.push_back(entry);
+    }
+    chain_.blocks_.assign(upwards.rbegin(), upwards.rend());
+}
+
+bool ChainState::CommitEntry(const BlockIndexEntry& entry) {
+    return sink_ == nullptr || sink_->CommitHeader(entry);
+}
+
+bool ChainState::StorageFaulted() const {
+    return sink_ != nullptr && sink_->HasFault();
+}
+
+bool ChainState::CommitCurrentTip() {
+    if (sink_ == nullptr) {
+        // No sink is an in-memory chain, which is a complete thing to be. The changes stay
+        // in `coins_` and the tip is whatever `chain_` says, exactly as before persistence
+        // existed.
+        return true;
+    }
+    return sink_->CommitTip(*coins_, Tip().hash);
 }
 
 std::expected<const BlockIndexEntry*, HeaderError> ChainState::AcceptBlock(const Block& block,
@@ -103,11 +136,13 @@ std::expected<const BlockIndexEntry*, HeaderError> ChainState::AcceptBlock(const
     // does not match its own header is exactly what this call is here to catch.
     if (const consensus::Verdict sound = consensus::CheckBlock(block, *params_); !sound) {
         index_->RecordFailure(*entry);
+        (void)CommitEntry(*entry);
         return std::unexpected(HeaderError{sound.error()});
     }
 
     store_->PutBlock(entry->hash, block);
     index_->RecordValidity(*entry, BlockValidity::Body);
+    (void)CommitEntry(*entry);
     return entry;
 }
 
@@ -142,6 +177,9 @@ std::expected<void, ActivationFailure> ChainState::DisconnectTip(ActivationSumma
     }
 
     chain_.blocks_.pop_back();
+    if (!CommitCurrentTip()) {
+        return Stopped(ActivationError::CommitFailed, entry.hash);
+    }
     ++summary.disconnected;
     return {};
 }
@@ -168,7 +206,13 @@ std::expected<bool, ActivationFailure> ChainState::ConnectTip(const BlockIndexEn
     // Merkle root each time. A block that arrived through `AcceptBlock` is already past this.
     if (entry.validity < BlockValidity::Body) {
         if (const consensus::Verdict sound = consensus::CheckBlock(*block, *params_); !sound) {
+            // A body that came back from a faulted store may not be the body that was
+            // written, and ruling a block out is permanent and durable. Stop instead.
+            if (StorageFaulted()) {
+                return Stopped(ActivationError::StorageFaulted, entry.hash);
+            }
             index_->RecordFailure(entry);
+            (void)CommitEntry(entry);
             summary.rejected.push_back({entry.hash, entry.height, sound.error()});
             return false;
         }
@@ -182,7 +226,15 @@ std::expected<bool, ActivationFailure> ChainState::ConnectTip(const BlockIndexEn
     const consensus::Computed<utxo::ConnectResult> applied =
         utxo::ConnectBlock(*block, *coins_, *params_);
     if (!applied.has_value()) {
+        // Every input this block spends was looked up in the coins set, and a set backed by
+        // faulted storage reports a coin it cannot read as one that does not exist — which
+        // is indistinguishable, here, from the block spending a coin that never did. The
+        // block may be perfectly valid, so its verdict is discarded rather than recorded.
+        if (StorageFaulted()) {
+            return Stopped(ActivationError::StorageFaulted, entry.hash);
+        }
         index_->RecordFailure(entry);
+        (void)CommitEntry(entry);
         summary.rejected.push_back({entry.hash, entry.height, applied.error()});
         return false;
     }
@@ -190,6 +242,17 @@ std::expected<bool, ActivationFailure> ChainState::ConnectTip(const BlockIndexEn
     store_->PutUndo(entry.hash, applied->undo);
     chain_.blocks_.push_back(&entry);
     index_->RecordValidity(entry, BlockValidity::Full);
+    (void)CommitEntry(entry);
+
+    // The coins changes and the new tip, together or not at all. Per block rather than per
+    // activation: a sync that connected half a million blocks before its first commit would
+    // hold half a million blocks' worth of changes in memory, and would lose all of them to
+    // one interruption. Per block bounds both, and every committed state is a chain that
+    // was valid — which is what makes an interrupted reorganisation recoverable rather than
+    // merely detectable.
+    if (!CommitCurrentTip()) {
+        return Stopped(ActivationError::CommitFailed, entry.hash);
+    }
     ++summary.connected;
     return true;
 }
