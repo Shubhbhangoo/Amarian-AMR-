@@ -51,6 +51,7 @@ add_library(amarian::primitives ALIAS amarian_primitives)
 add_library(amarian_consensus STATIC
     consensus/genesis.cpp
     consensus/target.cpp
+    consensus/validation.cpp
 )
 target_link_libraries(amarian_consensus PUBLIC amarian::primitives)
 add_library(amarian::consensus ALIAS amarian_consensus)
