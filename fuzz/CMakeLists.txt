@@ -37,6 +37,15 @@ target_link_options(amarian_fuzz_settings INTERFACE
 function(amarian_add_fuzzer name source)
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE amarian_fuzz_settings ${ARGN})
+
+    # A second executable over the same harness with a plain main instead of
+    # libFuzzer's. Needed to replay a saved input under gdb or valgrind, and to
+    # separate the harness's memory behaviour from the fuzzer's. Built with
+    # coverage instrumentation but without the fuzzer driver, so it links a real
+    # main.
+    add_executable(standalone_${name} ${source} standalone_main.cpp)
+    target_compile_options(standalone_${name} PRIVATE -fsanitize=fuzzer-no-link)
+    target_link_libraries(standalone_${name} PRIVATE ${ARGN})
 endfunction()
 
 # Attacker-facing: hex arrives from RPC arguments and config files.
