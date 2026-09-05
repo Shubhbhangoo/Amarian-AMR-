@@ -22,6 +22,7 @@ amarian_add_test(test_primitives unit
     primitives_lock_test.cpp
     primitives_merkle_test.cpp
     primitives_outpoint_test.cpp
+    primitives_sighash_test.cpp
     primitives_spend_condition_test.cpp
     primitives_transaction_test.cpp
 )

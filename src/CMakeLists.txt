@@ -44,6 +44,7 @@ add_library(amarian_primitives STATIC
     primitives/lock.cpp
     primitives/merkle.cpp
     primitives/outpoint.cpp
+    primitives/sighash.cpp
     primitives/spend_condition.cpp
     primitives/transaction.cpp
     primitives/witness.cpp
