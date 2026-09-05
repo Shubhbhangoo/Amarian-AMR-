@@ -54,7 +54,8 @@ bool SpendCondition::Deserialize(Reader& reader,
 
     uint64_t count = 0;
     // A key always contains a u16 scheme and one compact-size byte.
-    if (!reader.ReadCompactSize(count, 3) || std::cmp_greater(count, max_keys)) {
+    if (!reader.ReadCompactSize(count, PublicKey::MIN_SERIALIZED_SIZE) ||
+        std::cmp_greater(count, max_keys)) {
         reader.Fail();
         return false;
     }

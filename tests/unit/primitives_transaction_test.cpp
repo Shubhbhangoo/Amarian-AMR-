@@ -107,7 +107,8 @@ constexpr TxLimits kLimits{.max_inputs = 16,
                            .max_keys = 16,
                            .max_key_size = 80,
                            .max_signatures = 16,
-                           .max_signature_size = 80};
+                           .max_signature_size = 80,
+                           .max_coinbase_data_size = 100};
 
 TEST(TransactionPrimitive, SerializesTheCanonicalWireForm) {
     const Sample sample = MakeSample();
@@ -287,12 +288,11 @@ TEST(TransactionPrimitive, DecodingDoesNotJudgeStructuralValidity) {
 }
 
 TEST(TransactionPrimitive, WitnessCountIsNotTiedToInputCountAtThisLayer) {
-    // Two witnesses for one input, and a coinbase-style sentinel outpoint, both
-    // decode: matching witnesses to inputs and recognising the coinbase are
-    // consensus rules, not part of the encoding.
+    // Two witnesses for one input decode: matching witnesses to inputs is a consensus
+    // rule, not part of the encoding.
     Transaction tx;
     tx.version = 1;
-    tx.inputs.push_back({.outpoint = {.index = 0xFFFFFFFFU}, .sequence = 0xFFFFFFFFU});
+    tx.inputs.push_back({.outpoint = {.index = 7}, .sequence = 0xFFFFFFFFU});
     tx.outputs.push_back({.amount = 0, .lock = {.version = 1, .program = {}}});
     tx.locktime = 0;
     const Witness witness{
@@ -308,6 +308,39 @@ TEST(TransactionPrimitive, WitnessCountIsNotTiedToInputCountAtThisLayer) {
     ASSERT_TRUE(Transaction::Deserialize(reader, decoded, kLimits));
     EXPECT_TRUE(reader.Finish());
     EXPECT_EQ(decoded, tx);
+}
+
+/// The coinbase's witness section is one arbitrary byte string rather than a witness
+/// list, and which form the bytes take is decided by the inputs that precede them. If
+/// the encoder and decoder ever disagreed about that, a coinbase would be undecodable
+/// and no block could be accepted at all.
+TEST(TransactionPrimitive, CoinbaseCarriesArbitraryBytesInPlaceOfWitnesses) {
+    Transaction tx;
+    tx.version = 1;
+    tx.inputs.push_back(MakeCoinbaseInput(4'096));
+    tx.outputs.push_back({.amount = 50, .lock = {.version = 1, .program = ByteVec(32, 0x11)}});
+    tx.coinbase_data = ByteVec{'h', 'i', 0x00, 0xFF};
+    ASSERT_TRUE(tx.IsCoinbase());
+
+    Writer writer;
+    tx.Serialize(writer);
+    Reader reader(writer.Bytes());
+    Transaction decoded;
+    ASSERT_TRUE(Transaction::Deserialize(reader, decoded, kLimits));
+    EXPECT_TRUE(reader.Finish());
+    EXPECT_EQ(decoded, tx);
+
+    // The height lives in `sequence`, inside the txid preimage, so two coinbases that
+    // are otherwise identical still have distinct txids. The extranonce lives outside
+    // it, so rolling it moves the wtxid — and therefore the Merkle root — alone.
+    Transaction next_height = tx;
+    next_height.inputs[0] = MakeCoinbaseInput(4'097);
+    EXPECT_NE(next_height.Txid(), tx.Txid());
+
+    Transaction rolled = tx;
+    rolled.coinbase_data.push_back(0x01);
+    EXPECT_EQ(rolled.Txid(), tx.Txid());
+    EXPECT_NE(rolled.Wtxid(), tx.Wtxid());
 }
 
 }  // namespace

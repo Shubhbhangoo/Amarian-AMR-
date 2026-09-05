@@ -54,7 +54,7 @@ bool TxOutput::Deserialize(Reader& reader, TxOutput& out, size_t max_lock_progra
     // Range check at deserialisation, per DECISIONS #20. A negative amount is
     // representable on the wire so that it is detectable; this is the one place
     // the detection happens, and every amount in memory has passed it.
-    if (decoded.amount < 0 || decoded.amount > MAX_MONEY) {
+    if (!IsValidAmount(decoded.amount)) {
         reader.Fail();
         return false;
     }
@@ -64,6 +64,13 @@ bool TxOutput::Deserialize(Reader& reader, TxOutput& out, size_t max_lock_progra
 
 void Transaction::Serialize(Writer& writer) const {
     SerializeWithoutWitnesses(writer);
+    // The witness section. A coinbase authorises nothing, so its section is one
+    // arbitrary byte string instead of a witness list; which form appears is decided
+    // by the inputs, which are already on the wire above.
+    if (IsCoinbase()) {
+        writer.WriteByteString(coinbase_data);
+        return;
+    }
     writer.WriteCompactSize(witnesses.size());
     for (const Witness& witness : witnesses) {
         witness.Serialize(writer);
@@ -90,10 +97,10 @@ bool Transaction::Deserialize(Reader& reader, Transaction& out, const TxLimits& 
         return false;
     }
 
-    // A TxInput is exactly 40 bytes, so its count is bounded against the bytes
+    // A TxInput is a fixed size, so its count is bounded against the bytes
     // remaining before anything is reserved.
     size_t input_count = 0;
-    if (!ReadCount(reader, input_count, limits.max_inputs, 40)) {
+    if (!ReadCount(reader, input_count, limits.max_inputs, TxInput::SERIALIZED_SIZE)) {
         return false;
     }
     decoded.inputs.reserve(input_count);
@@ -105,10 +112,9 @@ bool Transaction::Deserialize(Reader& reader, Transaction& out, const TxLimits& 
         decoded.inputs.push_back(std::move(input));
     }
 
-    // A TxOutput is at least 10 bytes: 8 for the amount, 1 for the lock version,
-    // 1 for the program's compact-size length.
+    // A TxOutput has a floor of an amount, a lock version, and a length byte.
     size_t output_count = 0;
-    if (!ReadCount(reader, output_count, limits.max_outputs, 10)) {
+    if (!ReadCount(reader, output_count, limits.max_outputs, TxOutput::MIN_SERIALIZED_SIZE)) {
         return false;
     }
     decoded.outputs.reserve(output_count);
@@ -124,10 +130,20 @@ bool Transaction::Deserialize(Reader& reader, Transaction& out, const TxLimits& 
         return false;
     }
 
-    // A Witness is at least 4 bytes: 3 for an empty condition, 1 for a
-    // zero-signature count. Its nested lengths are bounded as they are read.
+    // The witness section, in whichever of its two forms the inputs above call for.
+    // A coinbase carries one arbitrary byte string; everything else carries witnesses.
+    if (decoded.IsCoinbase()) {
+        if (!reader.ReadByteString(decoded.coinbase_data, limits.max_coinbase_data_size)) {
+            return false;
+        }
+        out = std::move(decoded);
+        return true;
+    }
+
+    // A Witness has a floor of an empty condition and a zero signature count. Its
+    // nested lengths are bounded as they are read.
     size_t witness_count = 0;
-    if (!ReadCount(reader, witness_count, limits.max_witnesses, 4)) {
+    if (!ReadCount(reader, witness_count, limits.max_witnesses, Witness::MIN_SERIALIZED_SIZE)) {
         return false;
     }
     decoded.witnesses.reserve(witness_count);
@@ -158,6 +174,17 @@ Hash256 Transaction::Wtxid() const {
     Writer writer;
     Serialize(writer);
     return DoubleSha256(writer.Bytes());
+}
+
+size_t Transaction::Weight() const {
+    Writer base_only;
+    SerializeWithoutWitnesses(base_only);
+    Writer full;
+    Serialize(full);
+    // The witness section is everything the txid preimage omits, including its own
+    // count prefix (DECISIONS #33).
+    const size_t base = base_only.Size();
+    return base * WITNESS_SCALE_FACTOR + (full.Size() - base);
 }
 
 }  // namespace amarian

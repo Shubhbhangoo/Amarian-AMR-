@@ -19,6 +19,9 @@ namespace amarian {
 /// condition's hash matches the lock it claims to satisfy are consensus checks;
 /// primitives only decode the bytes canonically and within the bounds given.
 struct Witness {
+    /// Smallest wire form: an empty condition and a zero signature count.
+    static constexpr size_t MIN_SERIALIZED_SIZE = SpendCondition::MIN_SERIALIZED_SIZE + 1;
+
     SpendCondition condition;
     std::vector<Signature> signatures;
 

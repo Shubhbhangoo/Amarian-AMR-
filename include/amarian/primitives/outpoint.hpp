@@ -14,6 +14,9 @@ namespace amarian {
 /// `txid`. It has no special values at this layer: the coinbase sentinel is a
 /// transaction structural rule, not a different wire type.
 struct OutPoint {
+    /// Fixed on the wire: a 32-byte txid and a 4-byte index.
+    static constexpr size_t SERIALIZED_SIZE = Hash256::SIZE + sizeof(uint32_t);
+
     Hash256 txid{};
     uint32_t index = 0;
 

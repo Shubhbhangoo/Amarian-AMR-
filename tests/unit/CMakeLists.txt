@@ -13,6 +13,7 @@ amarian_add_test(test_crypto unit
 target_link_libraries(test_crypto PRIVATE amarian::crypto)
 
 amarian_add_test(test_primitives unit
+    primitives_block_test.cpp
     primitives_lock_test.cpp
     primitives_merkle_test.cpp
     primitives_outpoint_test.cpp

@@ -32,6 +32,7 @@ add_library(amarian::crypto ALIAS amarian_crypto)
 
 # --- primitives: consensus data and canonical encodings ---------------------
 add_library(amarian_primitives STATIC
+    primitives/block.cpp
     primitives/lock.cpp
     primitives/merkle.cpp
     primitives/outpoint.cpp

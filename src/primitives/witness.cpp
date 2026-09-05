@@ -26,7 +26,8 @@ bool Witness::Deserialize(Reader& reader,
 
     uint64_t count = 0;
     // A signature always contains a u16 scheme and one compact-size byte.
-    if (!reader.ReadCompactSize(count, 3) || std::cmp_greater(count, max_signatures)) {
+    if (!reader.ReadCompactSize(count, Signature::MIN_SERIALIZED_SIZE) ||
+        std::cmp_greater(count, max_signatures)) {
         reader.Fail();
         return false;
     }
