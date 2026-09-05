@@ -27,18 +27,28 @@
 /// blocks, and no further ahead of the clock than `MAX_FUTURE_BLOCK_SECONDS`. The payout
 /// lock is chosen freely, because who receives the reward is not a consensus question.
 ///
+/// ## Fee selection
+///
+/// A template draws its non-coinbase transactions from a `mempool::Mempool`, passed in by
+/// the caller and never held here. The mining layer keeps no mutable state of its own: the
+/// pool arrives as an argument, so two callers may build templates from two different pools
+/// — a node and a test in the same process — and neither can be surprised by the other. A
+/// null pool means a coinbase-only template, which is what a node that has not accepted a
+/// transaction yet produces.
+///
+/// The fee total is computed from the entries the pool hands back and paid out in the
+/// coinbase, and the same total is what `consensus::CheckCoinbaseAmount` is handed below.
+/// It is never assumed on either side.
+///
 /// ## What is not here yet
 ///
-/// Fee selection, because there is no mempool: a template is coinbase-only, its fee
-/// total is zero, and `CheckCoinbaseAmount` is handed that zero rather than an assumed
-/// one. Retargeting, because Amarian has constant difficulty today — see
-/// `chain::NextTargetBits`. And a mining RPC, which is Phase 3's work and needs a
-/// long-poll and an extranonce protocol rather than a function call.
+/// A mining RPC, which is Phase 3's remaining work and needs a long-poll and an extranonce
+/// protocol rather than a function call.
 ///
 /// The nonce search below is a single-threaded loop over `header.nonce`, which is the
 /// honest shape of CPU mining for development and regtest, where a block costs a couple
 /// of hash attempts by design. It is not a competitive miner and does not pretend to be:
-/// there is no thread pool, no work splitting, and no `getblocktemplate`.
+/// there is no thread pool and no work splitting.
 
 #include <amarian/chain/block_index.hpp>
 #include <amarian/consensus/params.hpp>
@@ -50,6 +60,13 @@
 #include <cstdint>
 #include <expected>
 #include <string_view>
+
+namespace amarian::mempool {
+/// Forward-declared rather than included: the assembler holds a pointer to a pool and
+/// calls it only in the implementation, so a caller that builds coinbase-only templates
+/// does not acquire the mempool's headers to do it.
+class Mempool;
+}  // namespace amarian::mempool
 
 namespace amarian::mining {
 
@@ -64,10 +81,18 @@ struct BlockTemplate {
     Target target{};
 
     /// What the coinbase claims: the scheduled reward for this height, plus the fees of
-    /// the transactions included. The second term is zero today, and is a term rather
-    /// than an omission so that adding a mempool changes an expression here and no rule
-    /// anywhere.
+    /// the transactions included. The second term is zero for a coinbase-only template,
+    /// and is a term rather than an omission so that the reward a miner is paid and the
+    /// reward the rules allow are computed from one expression rather than two.
     int64_t reward = 0;
+
+    /// The fee total of the non-coinbase transactions in `block`, which is the second
+    /// term of `reward`.
+    ///
+    /// Reported rather than left to be rederived: a caller that wanted it would have to
+    /// look every input up in the UTXO set again, and `consensus::CheckCoinbaseAmount`
+    /// needs exactly this number to judge the coinbase.
+    int64_t fees = 0;
 };
 
 /// Why a template could not be built.
@@ -127,11 +152,17 @@ enum class TemplateError : uint8_t {
 /// pays — which is what makes it the escape hatch when a nonce range is exhausted, and
 /// what makes two miners with the same payout produce different work.
 ///
+/// `pool` is where the template's non-coinbase transactions come from, or null for a
+/// coinbase-only template. It is read and not modified: a template is a proposal, and a
+/// transaction stays in the pool until a block containing it is actually connected. The
+/// pool must outlive the call, and must not be modified during it.
+///
 /// The returned block is unsolved: its nonce is zero and its hash almost certainly does
 /// not meet its target. `SolveHeader` is the other half.
 [[nodiscard]] std::expected<BlockTemplate, TemplateError>
 BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_t now,
-                   ByteVec coinbase_data, const ChainParams& params);
+                   ByteVec coinbase_data, const ChainParams& params,
+                   const mempool::Mempool* pool = nullptr);
 
 /// Searches at most `attempts` nonces, starting from `header.nonce`, for one whose hash
 /// meets `target`. Leaves the solving nonce in `header` and returns true, or leaves the

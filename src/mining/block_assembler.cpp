@@ -5,18 +5,21 @@
 #include <amarian/consensus/params.hpp>
 #include <amarian/consensus/target.hpp>
 #include <amarian/consensus/validation.hpp>
+#include <amarian/mempool.hpp>
 #include <amarian/primitives/block.hpp>
 #include <amarian/primitives/lock.hpp>
 #include <amarian/primitives/transaction.hpp>
 #include <amarian/util/types.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace amarian::mining {
 
@@ -42,7 +45,8 @@ std::string_view Describe(TemplateError error) noexcept {
 
 std::expected<BlockTemplate, TemplateError>
 BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_t now,
-                   ByteVec coinbase_data, const ChainParams& params) {
+                   ByteVec coinbase_data, const ChainParams& params,
+                   const mempool::Mempool* pool) {
     // Refused before anything is built. `CheckTransaction` would reject the assembled block
     // for the same reason, and truncating instead would hand back a template committing to
     // bytes the miner did not choose.
@@ -66,12 +70,6 @@ BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_
     BlockTemplate assembled;
     assembled.target = *target;
 
-    // The scheduled issuance for this height, and no fee term because a template is
-    // coinbase-only until there is a mempool. Zero is what `CheckCoinbaseAmount` is handed
-    // below, rather than something it assumes, so the day fees exist an expression here
-    // changes and no rule anywhere does.
-    assembled.reward = BlockReward(height, params.issuance);
-
     Transaction coinbase;
     coinbase.version = 1;
     // The height travels in the input's `sequence`, which consensus requires and which is
@@ -79,15 +77,55 @@ BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_
     // at different heights paying the same lock the same amount still commit to different
     // transactions. `MakeCoinbaseInput` is the one place that shape is written down.
     coinbase.inputs.push_back(MakeCoinbaseInput(height));
-    coinbase.outputs.push_back(TxOutput{.amount = assembled.reward, .lock = payout});
+    // The scheduled issuance for this height. Fees are added to this amount once the
+    // transactions that pay them have been selected; the amount is a fixed-width field, so
+    // raising it later does not change the weight measured below.
+    coinbase.outputs.push_back(
+        TxOutput{.amount = BlockReward(height, params.issuance), .lock = payout});
     coinbase.locktime = 0;
     // Outside the txid and inside the wtxid, so rolling it changes the Merkle root and the
     // work being searched without changing who is paid what.
     coinbase.coinbase_data = std::move(coinbase_data);
 
-    Block& block = assembled.block;
-    block.transactions.push_back(std::move(coinbase));
+    // --- Fee selection --------------------------------------------------------------
+    //
+    // The room left for other transactions is the block limit minus the coinbase that has
+    // just been built — measured, not estimated. An estimate would have to be a guess about
+    // the payout lock's program length and the miner's coinbase bytes, and a guess that came
+    // out low would produce a template over `MAX_BLOCK_WEIGHT` that this node's own
+    // `CheckBlock` then refuses. There is nothing to guess about: the coinbase exists.
+    int64_t total_fees = 0;
+    if (pool != nullptr) {
+        const size_t coinbase_weight = coinbase.Weight();
+        const size_t available_weight = params.max_block_weight > coinbase_weight
+                                            ? params.max_block_weight - coinbase_weight
+                                            : 0;
+        // Entries and not transactions, so the fee of each is read from the entry the pool
+        // already holds rather than by hashing the transaction again to look it up. The
+        // order is a valid block order — every transaction follows the ones it spends from —
+        // which is what lets them be appended as they come.
+        const std::vector<const mempool::Entry*> selected = pool->GetTemplates(available_weight);
+        assembled.block.transactions.reserve(selected.size() + 1);
+        for (const mempool::Entry* entry : selected) {
+            assembled.block.transactions.push_back(entry->tx);
+            total_fees += entry->fee;
+        }
+    }
+    assembled.fees = total_fees;
 
+    // The coinbase pays the scheduled issuance plus the fees of everything above, and the
+    // same `total_fees` is what `CheckCoinbaseAmount` is handed below. One number, used
+    // twice, so the reward a miner takes and the reward the rules permit cannot drift.
+    coinbase.outputs[0].amount += total_fees;
+    assembled.reward = coinbase.outputs[0].amount;
+
+    // Transaction 0, ahead of everything selected. Inserted at the front rather than the
+    // pool's output being appended to it, because the coinbase's weight had to be known
+    // before there was anything to append.
+    assembled.block.transactions.insert(assembled.block.transactions.begin(),
+                                        std::move(coinbase));
+
+    Block& block = assembled.block;
     block.header.version = 1;
     block.header.height = height;
     block.header.prev_block = tip.hash;
@@ -135,7 +173,8 @@ BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_
         !placed) {
         return std::unexpected(TemplateError::HeaderRefused);
     }
-    if (const consensus::Verdict paid = consensus::CheckCoinbaseAmount(block, 0, params);
+    if (const consensus::Verdict paid =
+            consensus::CheckCoinbaseAmount(block, total_fees, params);
         !paid) {
         return std::unexpected(TemplateError::RewardRefused);
     }

@@ -59,6 +59,21 @@ amarian_add_test(test_chain "unit;consensus"
 )
 target_link_libraries(test_chain PRIVATE amarian::chain)
 
+# `unit` and not `unit;consensus`, by the criterion the label was given in DECISIONS.md: the
+# consensus gate covers the layers where a bug is a chain split. Neither of these is one. A
+# mempool that admits an illegal transaction, or an assembler that packs one, makes *this*
+# node build a block every other node refuses — an orphan it paid for, which is expensive and
+# entirely its own problem. No other node's view of validity moves.
+amarian_add_test(test_mempool unit
+    mempool_test.cpp
+)
+target_link_libraries(test_mempool PRIVATE amarian::mempool)
+
+amarian_add_test(test_mining unit
+    mining_test.cpp
+)
+target_link_libraries(test_mining PRIVATE amarian::mining)
+
 amarian_add_test(test_version unit
     version_test.cpp
 )
