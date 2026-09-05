@@ -6,8 +6,8 @@ is the important one: a decision with no stated reversal condition is a decision
 nobody can revisit.
 
 Status values: **settled** — changing it changes the project; **intent** — decided but
-not yet exercised by code; **provisional** — deliberately open, with the deciding
-phase named.
+not yet exercised by code; **implemented** — the code exists and is tested, and the
+entry says where; **provisional** — deliberately open, with the deciding phase named.
 
 Anything measured was measured on 12 × 2.5 GHz x86-64, WSL2 on Windows 11, on
 2026-09-04 unless stated. Numbers from a laptop are labelled as such wherever they
@@ -382,12 +382,16 @@ happen before any testnet that people outside the project use.
 
 ## Protocol
 
-All of the following are design intent that Phase 1 implements. Full specification in
+Most of the following is design intent that Phase 1 implements. Three entries have
+now landed in code and say so: the transaction structure of #22 and #23, and the
+Merkle construction of #25. Full specification in
 [AMARIAN_PROTOCOL.md](AMARIAN_PROTOCOL.md).
 
 ### 22. No script virtual machine
 
-**Intent, Phase 1.**
+**Structure implemented, Phase 1; evaluator not yet.** `SpendCondition` and `Lock` exist
+in `primitives/` with their canonical encodings and 36 tests; the code that evaluates a
+condition against a witness is part of the consensus work still to land.
 
 A lock commits to `{condition_version, threshold, keys[]}` rather than to a program. A
 threshold over a list of scheme-tagged keys covers single-key, `m`-of-`n`, and
@@ -401,7 +405,11 @@ available and unreviewed from the first block.
 
 ### 23. Every public key carries an explicit scheme identifier
 
-**Intent, Phase 1.**
+**Implemented, Phase 1**, as far as structure goes. `PublicKey` and `Signature` are both
+`{scheme: u16, bytes}` on the wire, and the codec preserves an unknown scheme rather than
+rejecting it, so a node relays what it cannot verify. The rule that **scheme 0 is never
+valid** is a consensus check, not a parse check, and arrives with the scheme registry —
+`primitives` deliberately decides nothing about validity.
 
 A key is `{scheme: u16, bytes}`, never a bare byte string whose meaning is inferred from
 its length. Length inference is how a codebase ends up unable to add a scheme whose key
@@ -428,7 +436,11 @@ for pool work-splitting, not as a necessity.
 
 ### 25. Merkle tree: promotion, distinct tags, and a leaf-count commitment
 
-**Intent, Phase 1.**
+**Implemented and tested, Phase 1.** [src/primitives/merkle.cpp](../src/primitives/merkle.cpp),
+covered by `primitives_merkle_test.cpp` at both levels the CVE occurs at: three leaves
+against the four-leaf list that repeats the third, and six leaves against the eight-leaf
+list whose final pair repeats the preceding one — the second of which passes on an
+implementation that promotes leaves but still duplicates inner nodes.
 
 Bitcoin duplicates the last node of an odd level, which is CVE-2012-2459: a block of `2n`
 transactions whose second half repeats the first produces the same root as the
@@ -491,6 +503,89 @@ depends on measurement not yet taken — initial-block-download time, storage gr
 the bandwidth a node needs are [Phase 12](ROADMAP.md#phase-12--performance-and-decentralisation)
 numbers. Adopting it now because 2 000 000 is a familiar figure would be exactly the
 reasoning this project is meant to avoid, so it carries the label until it is earned.
+
+### 31. Non-canonical encodings are rejected, not normalised
+
+**Implemented, Phase 1**, in [src/util/serialize.cpp](../src/util/serialize.cpp).
+
+A compact-size integer that could have been written in fewer bytes is a parse failure. The
+tempting alternative — read it, normalise it, carry on — is what gives one transaction two
+valid encodings and therefore two ids. That is not a theoretical concern: it is transaction
+malleability, and the version of it that reaches consensus is a chain split, because two
+nodes that disagree about whether `0xfd 0x01 0x00` is a valid encoding of 1 disagree about
+whether a block is valid.
+
+The same principle is why `Reader::Finish()` requires that every byte has been consumed.
+Trailing bytes after a well-formed structure are not debris to ignore; they are a second
+encoding of the same object, so they are an error.
+
+**Reversed if:** never, for consensus-facing data. A non-consensus format that needs
+lenient parsing gets its own reader rather than a relaxation of this one.
+
+### 32. Counts are bounded against remaining bytes before anything is allocated
+
+**Implemented, Phase 1**, in [src/util/serialize.cpp](../src/util/serialize.cpp).
+
+`Reader::ReadCompactSize` takes a per-element minimum encoded size and refuses a count that
+could not possibly be satisfied by the bytes still in the buffer, before the caller reserves
+anything. A count field is attacker-controlled; a 40-byte message claiming four billion
+inputs must cost 40 bytes of work, not four billion allocations. Checking after the
+allocation, or trusting a `MAX_*` constant alone, both leave a remote memory-exhaustion
+vector open — `MAX_*` bounds what is valid, not what an attacker can make a node try.
+
+Two supporting properties are part of the same decision: `Reader` failure is **sticky**, so
+a partial parse can never be mistaken for a successful short one, and a failed read writes
+nothing to its output parameter, so no caller can act on a half-populated object.
+
+### 33. The txid/wtxid split sits before the witness count
+
+**Implemented, Phase 1**, in [src/primitives/transaction.cpp](../src/primitives/transaction.cpp).
+
+`txid` covers version, inputs, outputs and locktime. `wtxid` covers all of that plus the
+witness section, and the boundary is drawn *before* the compact-size count that introduces
+the witnesses — not after it.
+
+One field either side and the txid would depend on how many witnesses a transaction
+carries, which is precisely the malleability the split exists to remove: a relay node could
+alter the count, and the transaction's identity would change while its authorised effect
+did not. Putting the count on the witness side of the line makes the txid a function of the
+transaction's committed content and nothing else.
+
+**Reversed if:** never without a new transaction version, since the split point is
+consensus-visible in every id the chain has ever recorded.
+
+### 34. UBSan integer findings are fatal, and scoped away from the standard library
+
+**Implemented, 2026-09-05**, in [cmake/AmarianSanitizers.cmake](../cmake/AmarianSanitizers.cmake)
+and [cmake/sanitizer-ignorelist.txt](../cmake/sanitizer-ignorelist.txt).
+
+The first fuzzing session printed a UBSan report and exited zero. `-fsanitize=integer` is
+not a member of the `undefined` group, so `-fno-sanitize-recover=undefined` never covered
+it: the process printed its diagnostic and carried on, and the fuzzer reported success. A
+check that can fire without failing the run is decorative, and a fuzzing campaign built on
+one is worse than none, because it produces evidence of absence that is not evidence of
+anything.
+
+The report itself was a `char`→`unsigned char` conversion inside libstdc++'s `<charconv>`,
+reached from a correct `std::from_chars` call in `util/args`. That conversion is
+well-defined; `implicit-integer-sign-change` flags it as suspicious, which is useful on our
+own code and noise on a header we do not control. So the fix has two halves: make the
+findings fatal, and scope the `implicit-*` family away from `include/c++/*` only — leaving
+every other check live everywhere, and leaving `implicit-*` live on all Amarian code.
+
+Both halves are demonstrated rather than asserted, by
+[scripts/ubsan_charconv_probe.sh](../scripts/ubsan_charconv_probe.sh), which reproduces the
+finding, shows it is recoverable, sweeps the ignorelist syntaxes, and confirms the check
+still fires on one of our own translation units afterwards. That last step matters: the
+first ignorelist written for this was a **silent no-op**, because a section header is a glob
+over sanitizer names and the comma form `[a,b]` matches none of them. Nothing in the build
+output says so.
+
+The flag is Clang-only because GCC 15.2 rejects `-fsanitize-ignorelist` outright, which is
+consistent — `-fsanitize=integer` is a Clang check, and both sanitizer presets are Clang.
+
+**Reversed if:** a suppression is ever needed for Amarian's own code. At that point the
+suppression is the wrong tool and the code should change.
 
 ## Still open
 

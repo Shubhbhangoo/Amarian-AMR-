@@ -19,6 +19,18 @@ fuzz/corpus/
 fuzz/crashes/
 fuzz/artifacts/
 
+# libFuzzer writes its artifacts to the working directory, which is the repo root
+# when a harness is run by hand. Three slow-unit files were already sitting there
+# untracked, one `git add -A` away from being committed. Ignoring the prefixes is
+# not a way to skip triage: scripts/time_slow_units.sh says whether a slow unit is
+# real, and anything reproducible is promoted to tests/vectors/ before deletion.
+slow-unit-*
+crash-*
+leak-*
+timeout-*
+oom-*
+minimized-from-*
+
 # Toolchain / editor noise
 node_modules/
 *.log
@@ -35,3 +47,10 @@ callgrind.out.*
 # Per-developer agent/tool state. Shared project rules belong in CLAUDE.md, which
 # is tracked; local permission grants are machine-specific and are not.
 .claude/settings.local.json
+
+# Not ours. An empty "Program Files/ModifiableWindowsApps" tree dated 2025-12-13
+# sits in the repo root, predating the project; it is an ACL-locked Windows reparse
+# point that rmdir cannot touch. Git ignores empty directories, so it has never
+# shown up in status — this line is here so it still cannot if something writes
+# into it.
+/Program Files/

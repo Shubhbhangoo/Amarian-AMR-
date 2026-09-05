@@ -6,7 +6,7 @@ This is a threat model written at Phase 0, which means it is a **specification o
 what must be defended**, not a report of what has been defended. Every defence
 below is labelled with the phase that implements it and whether a test exists. At
 the time of writing, the honest answer to "is this defended?" is *no* for almost
-everything here, because there is no consensus code yet.
+everything here, because there was no consensus code yet.
 
 That is the point of writing it now. An enumeration of attack classes produced
 *after* the code exists is an enumeration of the attacks the code happens to
@@ -14,6 +14,20 @@ stop. This one is meant to be the input to
 [Phase 9](ROADMAP.md#phase-9--security-engineering), whose acceptance criterion is
 that every class listed here has a regression test that fails if the defence is
 removed.
+
+**Updated 2026-09-05**, part way through Phase 1: eight rows now read **yes**,
+all of them in the deserialisation and transaction-identity classes, which are
+the parts of Phase 1 that have landed with tests. Nothing in the supply,
+authorisation, proof-of-work or network classes reads **yes**, and the reason
+differs by row — some of that code does not exist, and some of it now exists
+without a test. The context-free validation rules
+([src/consensus/validation.cpp](../src/consensus/validation.cpp)) landed on this
+date and are marked **implemented, untested** where they defend a row; that is a
+weaker claim than **yes** deliberately, because a rule nothing exercises is a rule
+nobody has checked. A row marked **yes** means a named test exists and is in the
+suite; it does not yet mean the stronger Phase 9 property that the test fails when
+the defence is removed. Where that stronger property has been checked by mutation,
+the row says so.
 
 For how to report something found in the code, see
 [../SECURITY.md](../SECURITY.md). This document is about the design.
@@ -77,8 +91,9 @@ people forget:
 
 The rule that follows is that **deserialisation is the security perimeter**. Every
 parser is a place where an attacker chooses the bytes, so each one gets a fuzz
-harness rather than a review. Two exist today ([fuzz/README.md](../fuzz/README.md));
-the number grows with each phase that adds a parser.
+harness rather than a review. Three exist today ([fuzz/README.md](../fuzz/README.md)),
+the widest being `fuzz_serialize` on the canonical codec, through which every byte
+a node acts on passes; the number grows with each phase that adds a parser.
 
 ## Attack classes
 
@@ -89,14 +104,14 @@ the defence is implemented; **Tested** is the current honest state.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 2 | no |
-| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | no |
-| Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | no |
-| Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 2 | no |
-| Negative amount | A signed amount below zero | Amounts are validated on deserialisation, not at point of use | 2 | no |
-| Duplicate coinbase | Two coinbase transactions in one block | Exactly one, at index 0 | 2 | no |
-| Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | no |
-| Duplicate transaction id | Re-mining an existing txid to overwrite or resurrect a UTXO (BIP-30 / BIP-34 class) | Height committed in the header, so identical coinbases across heights are impossible by construction | 1 | no |
+| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 1, 2 | implemented, untested — `CheckCoinbaseAmount`. The reward half is complete and derived from height alone; the fee half is a parameter until the UTXO set can produce it |
+| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | no — structurally guaranteed so far only in that no block field carries a fee total for a node to trust |
+| Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | no — needs the UTXO set to know what the inputs are worth |
+| Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 1, 2 | partial — the per-amount bound is in and tested; the output-side summing rule is implemented in `CheckTransaction` and `CheckCoinbaseAmount` but untested; the input side is Phase 2 |
+| Negative amount | A signed amount below zero | Amounts are validated on deserialisation, not at point of use | 1, 2 | **yes** — `TransactionPrimitive.OutputAmountIsRangeCheckedAtTheWholeTransactionLevel`. No code path in the node can hold a `TxOutput` outside `[0, MAX_MONEY]`, and `CheckTransaction` re-checks so that a transaction built in memory gets the same verdict as one parsed off the wire |
+| Duplicate coinbase | Two coinbase transactions in one block | Exactly one, at index 0 | 1 | implemented, untested — `CheckBlock` rejects a block whose first transaction is not a coinbase and one that contains a second |
+| Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | no — needs the UTXO set to know which height a coin was created at |
+| Duplicate transaction id | Re-mining an existing txid to overwrite or resurrect a UTXO (BIP-30 / BIP-34 class) | Height committed in the header and required to equal the coinbase input's `sequence`, which is inside the txid preimage, so identical coinbases across heights are impossible by construction | 1 | implemented, untested — the `sequence == height` rule is in `CheckBlock` |
 | Tail emission added later | A "temporary" subsidy to fund security | Not a code defence. The cap is enforced per-block from height, so adding one is a hard fork that every node must accept — the social defence is that it is impossible to do quietly | — | n/a |
 
 The last row is not padding. Most supply failures in practice are not exploits;
@@ -113,10 +128,22 @@ function of height with no parameters an operator can set.
 | Cross-chain replay | A mainnet transaction replayed on testnet or vice versa | `chain_id` in the sighash preimage, distinct per network | 1 | no |
 | Cross-input replay | A signature for input 0 accepted for input 1 | The input index is in the preimage | 1 | no |
 | Wrong-key substitution | Spending with a key that is not the one committed to | Lock commits to a hash of the whole `SpendCondition`; the revealed condition is hashed and compared before any signature is checked | 1 | no |
-| Threshold bypass | Satisfying a 2-of-3 with one signature counted twice | Each satisfied key counted at most once; duplicate keys in a condition rejected at construction | 1 | no |
+| Threshold bypass | Satisfying a 2-of-3 with one signature counted twice | Each satisfied key counted at most once; duplicate keys in a condition rejected at construction | 1 | partial — the duplicate-key half is implemented, untested: `CheckSpendCondition` requires the key list to be strictly ascending, which rejects duplicates and pins the ordering at the same time. The counting half arrives with signature verification |
 | Hash collision on a lock | Two spend conditions with the same commitment | 256-bit commitment; also why the commitment is domain-separated from every other hash use | 1 | no |
-| Domain confusion | A hash from one context accepted in another | Tagged hashing throughout, with the tag part of the preimage | 1 | no |
+| Domain confusion | A hash from one context accepted in another | Tagged hashing throughout, with the tag part of the preimage | 1 | **yes** — `CryptoHash.TagsDomainSeparateTheSameMessage`, and the BIP-340 construction itself is checked against published vectors |
 | Quantum key recovery from an exposed key | Shor's algorithm on a published public key | Locks commit to a hash, never a key; post-quantum schemes available from the first block. The mempool window is residual and acknowledged | 1, 6 | no |
+
+Three further rows belong to this class but are about a transaction's *identity*
+rather than its authorisation, and they are the part of it Phase 1 has settled.
+Identity matters here because a signature authorises a specific transaction: if the
+same authorised effect can be presented under a second id, everything that
+referenced the first id breaks.
+
+| Attack | Mechanism | Defence | Phase | Tested |
+|---|---|---|---|---|
+| Encoding malleability | A second byte encoding of the same transaction, giving it a second id | Non-minimal compact sizes are **rejected, not normalised**; `Reader::Finish()` requires exact consumption, so trailing bytes are a parse error rather than debris | 1 | **yes** — `CompactSize.RejectsNonMinimalEncodings`, `Reader.TrailingBytesFailTheParse`, `TransactionPrimitive.TrailingBytesAreRejectedByFinishNotByDeserialize`, plus `fuzz_serialize` asserting that every accepted compact size re-encodes to itself |
+| Witness malleability changing the txid | Altering the witness section in relay to change a transaction's id | The txid preimage ends *before* the compact-size count that introduces the witnesses, so neither witness data nor the count enters the txid | 1 | **yes** — `TransactionPrimitive.WitnessMalleabilityCannotChangeTheTxid` and `.TheWitnessCountBelongsToTheWitnessSection` |
+| Merkle root collision (CVE-2012-2459) | A different transaction list producing the same Merkle root, letting an attacker make a node mark a valid block permanently invalid | Three independent defences: odd nodes promoted unchanged rather than duplicated, distinct leaf and branch tags, and the leaf count committed in the root | 1 | **yes** — `Merkle.OddLeafIsPromotedRatherThanDuplicated`, `.InnerLevelPromotionDoesNotCollide`, `.CountIsCommitted`, and `.DistinctListsHaveDistinctRoots` over all 3279 lists of length 1–7 on three ids. `scripts/mutate_merkle.sh` records what the property tests cannot do: because the defences are redundant, removing any one of them is caught only by the fixed vectors |
 
 The malleability row is the one worth dwelling on. A signature that fails to verify
 is a non-event; a *second valid encoding* of a signature that does verify changes
@@ -153,8 +180,8 @@ convention. A reviewer can miss an `#include`; a link error cannot be missed.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Invalid work accepted | A header whose hash does not meet its target | Target recomputed from the header chain, never taken from the block | 1 | no |
-| Compact target manipulation | A `target_bits` encoding with a negative or overflowing mantissa, or a non-canonical encoding of the same target | Bounds-checked decode plus a canonical-form check; a target above the network maximum rejected | 1 | no |
+| Invalid work accepted | A header whose hash does not meet its target | Target recomputed from the header chain, never taken from the block | 1 | implemented, untested — `CheckBlockHeader` compares the hash against the header's own target in display order, and `ContextualCheckBlockHeader` refuses a header whose `target_bits` differ from the value the caller computed from the chain, so the header's field cannot buy a weaker target |
+| Compact target manipulation | A `target_bits` encoding with a negative or overflowing mantissa, or a non-canonical encoding of the same target | Bounds-checked decode plus a canonical-form check; a target above the network maximum rejected | 1 | partial — the codec is implemented and tested (`ConsensusTarget.*`, including the round-trip canonicality rule and the sign, overflow and zero-mantissa rejections); its use in `CheckBlockHeader` alongside the `pow_limit` floor is implemented, untested |
 | Difficulty manipulation by timestamps | Backdated or forward-dated headers to make the next target easier | ASERT retargeting on every block rather than on a window boundary, removing the boundary that Bitcoin's timewarp exploits; timestamps bounded relative to median-time-past and to a far-future limit | 3 | no |
 | Timewarp | Repeatedly rewinding timestamps across a retarget boundary to drive difficulty down | Per-block retarget plus a monotonicity constraint on median-time-past. The specific rule gets simulation evidence in Phase 3, not an appeal to precedent | 3 | no |
 | Low-difficulty chain flood | Thousands of cheap headers to exhaust memory or CPU | Headers-first sync with work checked before storage; a header chain must demonstrate more work than the current tip before its blocks are requested | 4 | no |
@@ -177,9 +204,9 @@ worth doing.
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
 | Quadratic validation cost | A transaction whose signature hashing grows with the square of its size (Bitcoin's pre-SegWit sighash flaw) | Sighash midstate reuse so each input's preimage is linear; committed to in the design before the format is fixed rather than patched later | 1 | no |
-| Expensive-to-validate block | A block filled with maximally costly inputs | Weight limit bounds size; measured per-block verification CPU for post-quantum schemes is 0.064–0.113 s against a 300 s interval, so the current parameters have four orders of magnitude of headroom | 1, 6 | no |
-| Memory exhaustion on deserialisation | A length prefix declaring a gigabyte | Every length checked against the remaining buffer *before* allocation, never against a constant alone | 1 | no |
-| Deeply nested or recursive structure | Blowing the stack during parsing | Structures are flat by design; no recursive descent in consensus deserialisation | 1 | no |
+| Expensive-to-validate block | A block filled with maximally costly inputs | Weight limit bounds size; measured per-block verification CPU for post-quantum schemes is 0.064–0.113 s against a 300 s interval, so the current parameters have four orders of magnitude of headroom | 1, 6 | partial — the weight limit is implemented, untested: `CheckBlock` measures the block's weight by serialising it and `CheckTransaction` bounds each transaction, so the cost of a block is bounded before any signature is verified. The measurement in the middle column is a real benchmark, recorded in [PQ_CRYPTO.md](PQ_CRYPTO.md) |
+| Memory exhaustion on deserialisation | A length prefix declaring a gigabyte | Every length checked against the remaining buffer *before* allocation, never against a constant alone, using a per-element minimum encoded size so a count is bounded by the bytes that could possibly satisfy it | 1 | **yes** — `CompactSize.RejectsACountLargerThanTheBytesRemaining`, `.BoundScalesWithElementSize`, `.ZeroElementSizeIsRejectedRatherThanWideningTheBound`, `ByteString.RejectsLengthBeyondTheBuffer`, `TransactionPrimitive.CountsAboveTheLimitsAreRejected`, and 21 million `fuzz_serialize` executions with a peak RSS the run records |
+| Deeply nested or recursive structure | Blowing the stack during parsing | Structures are flat by design; no recursive descent in consensus deserialisation | 1 | partial — true by construction and exercised by `fuzz_serialize`, but no test asserts the absence of recursion |
 | Mempool flooding | Cheap transactions to fill memory | Minimum relay fee, mempool size cap with fee-based eviction, per-peer rate limits. Policy, not consensus | 4 | no |
 | UTXO set bloat | Many tiny outputs to grow every node's state permanently | Dust threshold as relay policy. Not a consensus rule, because a consensus rule on output size cannot be relaxed later | 4 | no |
 | Address or inventory flooding | Millions of announcements | Bounded caches with random eviction, and rate limits per peer | 4 | no |
@@ -303,8 +330,11 @@ false is a security report, and a valuable one.
 3. **The network is not permanently partitioned.** Temporary partitions are
    expected and must be survived; a permanent one is two networks.
 4. **Enough independent nodes exist to make verification meaningful.** This is
-   currently **false** — there is no network. It is Phase 4 and Phase 10 work, and
-   until it is true, "decentralised" is not claimed.
+   currently **false** — there is no network, and no node in the tree has yet
+   validated a block against a chain. The context-free rules that decide whether a
+   block is *internally* well formed exist; what does not is a second node to
+   disagree with. It is Phase 4 and Phase 10 work, and until it is true,
+   "decentralised" is not claimed.
 5. **The compiler and standard library are correct.** Mitigated rather than assumed:
    two compilers, four sanitizers, and a full build matrix, which is why a codegen
    disagreement between GCC and Clang was found in Phase 0 rather than later.
@@ -314,28 +344,48 @@ false is a security report, and a valuable one.
 
 | Class | Defence designed | Defence implemented | Regression test |
 |---|---|---|---|
-| Supply integrity | yes | no | no |
-| Spend authorisation | yes | no | no |
-| Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers | no |
-| Proof of work and chain selection | yes | no | no |
-| Resource exhaustion | yes | no | no |
+| Supply integrity | yes | the per-amount bound, plus the coinbase, height and output-sum rules | one row, on the amount bound |
+| Spend authorisation | yes | structure and identity only, no verification | three rows, all on transaction identity |
+| Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers, canonical encoding | encoding rows only |
+| Proof of work and chain selection | yes | the target codec and the per-header work check; no chain selection | one row on the Merkle construction, plus the target codec |
+| Resource exhaustion | yes | the deserialisation rows, plus the weight limit | two rows, one of them fuzzed |
 | Network layer | outline only | no | no |
 | Wallet | outline only | no | no |
 | Build and supply chain | yes | mostly | one, informal |
-| Cryptographic agility | yes | no | no |
+| Cryptographic agility | yes | explicit scheme identifiers only | no |
 
-Six of nine rows are "no" in every column that matters. That is what Phase 0 of 13
-looks like, and a document claiming otherwise would be the more serious defect.
+Every class still has more "no" in it than "yes", which is what Phase 1 of 13
+looks like part way through. A document claiming otherwise would be the more
+serious defect. The third column moved on 2026-09-05 and the fourth did not, which
+is the honest shape of a component that landed today: the **Regression test** column
+is the one that decides whether a defence is real, and it says "no" for every rule
+in that commit.
 
 What exists today that belongs in this table at all: the layering contract enforced
-by the linker, checked arithmetic with `-fwrapv` behind it, hardening flags that
-stay on in Release, five test presets including two sanitizer builds, and two fuzz
-harnesses on the only two parsers that exist. Nothing about consensus, because there
-is no consensus code.
+by the linker; checked arithmetic with `-fwrapv` behind it; hardening flags that
+stay on in Release; five test presets including two sanitizer builds, with UBSan
+integer findings now fatal rather than recoverable; the canonical codec with its
+reject-not-normalise rule, sticky failure and bounds-before-allocation; consensus
+hashing checked against published vectors; the transaction primitives with the
+txid/wtxid split and the Merkle construction; three fuzz harnesses, the widest of
+which covers the deserialisation perimeter itself; and — new on this date — the
+context-free validation rules, which are implemented and not yet tested.
+
+What does not exist: any rule that needs to consult *state*. No signature is
+verified, no input amount is known, no chain is selected. A target is compared and
+an output sum is checked, but only within one block considered alone: nothing in the
+tree can yet answer "does this input exist, and is it still unspent", because that
+question needs the UTXO set. Everything in the network and wallet classes, and the
+half of the supply class that depends on inputs, is therefore still a plan, and the
+rows say so.
 
 [Phase 9](ROADMAP.md#phase-9--security-engineering) is where every row above
-acquires a test that fails when the defence is removed. Until then this document is
-a plan, and it is labelled as one.
+acquires a test that fails when the defence is removed — a stronger property than
+the **yes** entries currently claim, and one that
+[scripts/mutate_merkle.sh](../scripts/mutate_merkle.sh) shows is not automatic:
+redundant defences make single-mutation testing blind unless the tests are designed
+against it. That is a Phase 9 problem worth knowing about now rather than
+discovering then.
 
 
 
