@@ -34,6 +34,8 @@ std::string_view Describe(IndexError error) noexcept {
             return "the header's predecessor is not known";
         case IndexError::PredecessorInvalid:
             return "the header builds on a branch that was rejected";
+        case IndexError::AlreadyRuledOut:
+            return "the block has already been ruled out";
     }
     // Unreachable: the switch is total, and -Wswitch-enum makes a new enumerator a build
     // failure here rather than a silent fall-through.

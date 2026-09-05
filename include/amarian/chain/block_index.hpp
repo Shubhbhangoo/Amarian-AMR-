@@ -145,6 +145,15 @@ enum class IndexError : uint8_t {
     UnknownPredecessor,
     /// An ancestor was rejected, so no descendant of it can ever be connected.
     PredecessorInvalid,
+    /// This block itself has already been ruled out — its own body failed a rule on an
+    /// earlier offer, or a `RecordFailure` reached it. Distinct from `PredecessorInvalid`
+    /// because the sender is answerable for a block whose own rules it broke, and merely
+    /// unlucky when the fault is an ancestor's.
+    ///
+    /// Never returned by `AddHeader`, which reports what it knows about a header's
+    /// *predecessor*; this is for the callers above it that offer a body for an entry the
+    /// index has already judged.
+    AlreadyRuledOut,
 };
 
 /// Why a header was not added: either the consensus rule that rejected it, or an

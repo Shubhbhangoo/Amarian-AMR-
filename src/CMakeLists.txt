@@ -90,6 +90,8 @@ add_library(amarian::utxo ALIAS amarian_utxo)
 # chain is real can be tested without either.
 add_library(amarian_chain STATIC
     chain/block_index.cpp
+    chain/block_store.cpp
+    chain/chain_state.cpp
 )
 target_link_libraries(amarian_chain PUBLIC amarian::utxo)
 add_library(amarian::chain ALIAS amarian_chain)
