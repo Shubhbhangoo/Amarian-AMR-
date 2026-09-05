@@ -25,6 +25,7 @@
 #include <amarian/consensus/params.hpp>
 #include <amarian/consensus/validation.hpp>
 #include <amarian/crypto/signature.hpp>
+#include <amarian/mempool.hpp>
 #include <amarian/mining/block_assembler.hpp>
 #include <amarian/primitives/block.hpp>
 #include <amarian/primitives/lock.hpp>
@@ -45,6 +46,7 @@
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -318,12 +320,93 @@ std::optional<Lock> ParsePayout(const std::string& hex, const ChainParams& param
     return lock;
 }
 
+/// Keeps the mempool in step with the active chain.
+///
+/// The pool holds transactions that are unconfirmed *as of the tip*, and the block assembler
+/// takes what the pool hands it without judging it again — deliberately, because a second
+/// validation there would be a second implementation of the rules. So every transaction in
+/// the pool must be one the next block could legally contain, and that is a property the
+/// chain moving underneath it can destroy. This class is what stops it destroying it
+/// quietly.
+///
+/// Connections are handled as they happen and reorganisations once at the end, which is not
+/// an inconsistency but the difference in what the two cost. `RemoveForBlock` is proportional
+/// to the block and exactly right: it drops what the block confirmed and what the block
+/// conflicts with. The reorganisation sweep re-judges every entry in the pool, signatures
+/// included, so running it per reversed block would do the same expensive work once per block
+/// of a reorganisation to reach the answer the last pass would have reached anyway.
+class PoolKeeper final : public chain::TipObserver {
+public:
+    PoolKeeper(const chain::ChainState& state, const ChainParams& params)
+        : state_(&state), params_(&params) {}
+
+    /// The pool itself. Owned here rather than beside this class so that the pool and the
+    /// thing responsible for its upkeep cannot be wired to two different objects — which is
+    /// the same reason `ChainState` owns the correspondence between the index and the coins
+    /// set instead of leaving a caller to hold both.
+    [[nodiscard]] mempool::Mempool& Pool() noexcept { return pool_; }
+    [[nodiscard]] const mempool::Mempool& Pool() const noexcept { return pool_; }
+
+    void BlockConnected(const Block& block, const chain::BlockIndexEntry& entry) override {
+        const size_t dropped = pool_.RemoveForBlock(block);
+        if (dropped != 0) {
+            AMARIAN_DEBUG(log::Category::General,
+                          "mempool: the block at height {} removed {} entry(ies)",
+                          entry.height,
+                          dropped);
+        }
+    }
+
+    void BlockDisconnected(const Block& unused_block,
+                           const chain::BlockIndexEntry& entry) override {
+        static_cast<void>(unused_block);
+        // Recorded rather than acted on. The sweep needs the coins set and the tip as they
+        // will be when activation has finished, and mid-walk they are neither — the chain may
+        // still reverse further blocks or apply a whole branch before it settles.
+        reorganised_ = true;
+        AMARIAN_DEBUG(log::Category::General, "mempool: height {} was reversed", entry.height);
+    }
+
+    /// Re-judges the pool against the chain as it now stands, if anything was reversed.
+    ///
+    /// Called after `ActivateBestChain` returns and never from a notification, which is what
+    /// makes reading the state here allowed: `TipObserver` forbids an observer from touching
+    /// the chain during a callback because activation is mid-walk, and this is not one.
+    void Settle() {
+        if (!reorganised_) {
+            return;
+        }
+        reorganised_ = false;
+        // The height a pool transaction would now confirm at, which is what maturity and
+        // locktime are judged against. Saturating for the same reason the assembler's is: a
+        // tip at the top of the range has no valid child, and that is for the rules to say.
+        const uint32_t tip_height = state_->Tip().height;
+        const uint32_t spend_height =
+            tip_height < std::numeric_limits<uint32_t>::max() ? tip_height + 1 : tip_height;
+        const size_t dropped = pool_.RemoveForReorg(state_->Coins(), spend_height, *params_);
+        if (dropped != 0) {
+            // Worth a warning rather than a debug line. These are transactions this node had
+            // accepted and would have mined, and the reason they are gone is that the chain
+            // moved under them — which the sender has no way to see and will want to know.
+            AMARIAN_WARN(log::Category::General,
+                         "mempool: dropped {} entry(ies) that the reorganisation invalidated",
+                         dropped);
+        }
+    }
+
+private:
+    const chain::ChainState* state_;
+    const ChainParams* params_;
+    mempool::Mempool pool_;
+    bool reorganised_ = false;
+};
+
 /// Brings the active chain up to the best block this node holds, reporting what moved.
 ///
 /// Called at startup as well as after every block, because an interrupted run can leave
 /// bodies stored above the committed tip: they were accepted, and the process stopped before
 /// they were applied. Resuming means applying them, and it is the same call either way.
-bool Advance(chain::ChainState& state) {
+bool Advance(chain::ChainState& state, PoolKeeper& keeper) {
     const std::expected<chain::ActivationSummary, chain::ActivationFailure> activated =
         state.ActivateBestChain();
     if (!activated.has_value()) {
@@ -333,6 +416,10 @@ bool Advance(chain::ChainState& state) {
                       chain::Describe(activated.error().error));
         return false;
     }
+
+    // Before anything is reported, so that a log line about a reorganisation and the pool it
+    // invalidated appear in the order the two things happened.
+    keeper.Settle();
 
     // Not a failure. Refusing an invalid block and carrying on to the next-best branch is
     // activation working, and the operator is told which blocks those were because a node that
@@ -374,6 +461,7 @@ void ReportTip(const chain::ChainState& state) {
 /// The assembler and the validator are separate bodies of code on purpose, so a template this
 /// node refuses is a bug worth stopping on and not a formality to skip.
 bool GenerateBlocks(chain::ChainState& state,
+                    PoolKeeper& keeper,
                     const Lock& payout,
                     int64_t count,
                     uint64_t attempts,
@@ -381,7 +469,8 @@ bool GenerateBlocks(chain::ChainState& state,
     for (int64_t made = 0; made < count; ++made) {
         const int64_t now = UnixSeconds();
         const std::expected<mining::BlockTemplate, mining::TemplateError> assembled =
-            mining::BuildBlockTemplate(state.Tip(), payout, now, ByteVec{}, params);
+            mining::BuildBlockTemplate(
+                state.Tip(), payout, now, ByteVec{}, params, &keeper.Pool());
         if (!assembled.has_value()) {
             AMARIAN_ERROR(log::Category::General,
                           "cannot build a block on {}: {}",
@@ -410,17 +499,23 @@ bool GenerateBlocks(chain::ChainState& state,
                           chain::Describe(accepted.error()));
             return false;
         }
-        if (!Advance(state)) {
+        if (!Advance(state, keeper)) {
             return false;
         }
 
+        // The transaction count excludes the coinbase, so it reads as "what this block carried
+        // for other people" — which is the number that says whether the mempool is reaching the
+        // assembler at all, and is zero for every block until one does.
         AMARIAN_INFO(log::Category::General,
-                     "mined height {} {} (nonce {}, {} facets to a version {} lock)",
+                     "mined height {} {} (nonce {}, {} tx, {} facets to a version {} lock, {} of "
+                     "it fees)",
                      block.header.height,
                      block.header.Hash().ToHex(),
                      block.header.nonce,
+                     block.transactions.size() - 1,
                      assembled->reward,
-                     payout.version);
+                     payout.version,
+                     assembled->fees);
     }
     return true;
 }
@@ -507,7 +602,10 @@ bool ExportBlocks(const chain::ChainState& state,
 /// rather than the first — but it does make the run fail. A file that this node partly refuses
 /// is not a file it agrees with, and reporting success would be reporting a chain that is not
 /// the one that was offered.
-bool ImportBlocks(chain::ChainState& state, const std::string& path, const ChainParams& params) {
+bool ImportBlocks(chain::ChainState& state,
+                  PoolKeeper& keeper,
+                  const std::string& path,
+                  const ChainParams& params) {
     std::FILE* const in = std::fopen(path.c_str(), "rb");
     if (in == nullptr) {
         AMARIAN_ERROR(log::Category::General, "cannot open '{}' for reading", path);
@@ -612,7 +710,7 @@ bool ImportBlocks(chain::ChainState& state, const std::string& path, const Chain
     // Applied once, after the whole file, rather than per block: a run of blocks is one walk up
     // the branch either way. Skipped when the file yielded nothing at all, so that a file this
     // node refused outright does not also log a chain movement that never happened.
-    if (offered != 0 && !Advance(state)) {
+    if (offered != 0 && !Advance(state, keeper)) {
         return false;
     }
     return ok && refused == 0;
@@ -736,21 +834,36 @@ int Run(int argc, char* argv[]) {
     utxo::CoinsCache coins = utxo::CoinsCache::Over(**db);
     chain::ChainState state(loaded->index, coins, **db, params);
     state.PersistTo(**db);
+
+    // The pool is empty at startup and stays that way until something offers a transaction, so
+    // it is registered before the catch-up activation below purely so there is no window in
+    // which the chain can move without the pool hearing about it. A pool that missed a
+    // connection would keep offering a transaction that block already confirmed, and the
+    // assembler does not re-check what the pool hands it.
+    //
+    // Nothing persists it. A mempool is unconfirmed by definition — every entry in it is
+    // either mined, replaced, or invalidated eventually, and none of it is state this node
+    // owes anyone across a restart. Reloading a pool from disk would mean re-judging every
+    // entry against a chain that may have moved a long way, which is the sweep, at startup,
+    // for transactions nobody asked this node to keep.
+    PoolKeeper keeper(state, params);
+    state.ObserveWith(keeper);
+
     state.ResumeAt(*loaded->tip);
     ReportTip(state);
 
     // Anything accepted but never applied before the last run stopped is applied now. Without
     // this a resumed node would sit below a tip it already holds every block for.
-    if (!Advance(state)) {
+    if (!Advance(state, keeper)) {
         return EXIT_FAILURE;
     }
 
     const bool acted = parser.Has("import-blocks") || generate > 0 || parser.Has("export-blocks");
     if (parser.Has("import-blocks") &&
-        !ImportBlocks(state, parser.GetString("import-blocks"), params)) {
+        !ImportBlocks(state, keeper, parser.GetString("import-blocks"), params)) {
         return EXIT_FAILURE;
     }
-    if (generate > 0 && !GenerateBlocks(state, *payout, generate, attempts, params)) {
+    if (generate > 0 && !GenerateBlocks(state, keeper, *payout, generate, attempts, params)) {
         return EXIT_FAILURE;
     }
     if (parser.Has("export-blocks") &&

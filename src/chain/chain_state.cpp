@@ -180,6 +180,12 @@ std::expected<void, ActivationFailure> ChainState::DisconnectTip(ActivationSumma
     if (!CommitCurrentTip()) {
         return Stopped(ActivationError::CommitFailed, entry.hash);
     }
+
+    // After the commit, never before: an observer told about a reversal that a failed commit
+    // then left in place would have unwound state the chain did not.
+    if (observer_ != nullptr) {
+        observer_->BlockDisconnected(*block, entry);
+    }
     ++summary.disconnected;
     return {};
 }
@@ -252,6 +258,13 @@ std::expected<bool, ActivationFailure> ChainState::ConnectTip(const BlockIndexEn
     // merely detectable.
     if (!CommitCurrentTip()) {
         return Stopped(ActivationError::CommitFailed, entry.hash);
+    }
+
+    // After the commit, for the reason `TipObserver` documents: a mempool told that a block
+    // confirmed would stop offering that block's transactions, and a commit failure here
+    // means the block did not confirm.
+    if (observer_ != nullptr) {
+        observer_->BlockConnected(*block, entry);
     }
     ++summary.connected;
     return true;

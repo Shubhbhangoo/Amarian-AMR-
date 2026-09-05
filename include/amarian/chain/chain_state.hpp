@@ -254,6 +254,57 @@ public:
     [[nodiscard]] virtual bool HasFault() const { return false; }
 };
 
+/// Told which blocks the active chain gained and lost, as it happens.
+///
+/// The layers above this one keep state that is a function of the active chain without
+/// being part of it: the mempool holds transactions that are unconfirmed *as of the tip*,
+/// a wallet holds balances confirmed as of it, and Phase 4's relay decides what to
+/// announce from it. None of those are consensus, so none of them may be reached down to
+/// from here — but all three need the same fact, and it is a fact only this class knows.
+///
+/// So it is an interface declared in this layer and implemented above it. The chain layer
+/// does not link the mempool and never will; it knows only that someone wants to be told.
+/// That inversion is the whole reason this exists rather than `ActivationSummary` carrying
+/// the blocks: a summary would have to name them by hash, and every observer would then
+/// re-read the bodies from storage that activation had just read and thrown away.
+///
+/// ## Called after the commit, never before
+///
+/// Both notifications happen once the block's effect on the coins set and the new tip have
+/// been made durable. An observer therefore never hears about a block that a failed commit
+/// then unwound, which matters most for the mempool: told about a connection that did not
+/// stick, it would drop transactions that are still unconfirmed and stop offering them,
+/// with nothing anywhere reporting that it had.
+///
+/// The order within one activation is the order the chain moved: every `BlockDisconnected`
+/// for the branch being left, then every `BlockConnected` for the branch being joined,
+/// lowest height first. An observer that only needs to know *that* a reorganisation
+/// happened can read `ActivationSummary::Reorganised()` instead and do its work once.
+///
+/// ## What an implementation may not do
+///
+/// Neither call may touch the `ChainState` that made it — activation is mid-walk, and a
+/// reentrant `AcceptBlock` or `ActivateBestChain` would move the chain underneath the loop
+/// that is moving it. Reading the block, the entry and the observer's own state is the
+/// whole contract; anything more belongs after activation returns.
+class TipObserver {
+public:
+    TipObserver() = default;
+    TipObserver(const TipObserver&) = default;
+    TipObserver(TipObserver&&) = default;
+    TipObserver& operator=(const TipObserver&) = default;
+    TipObserver& operator=(TipObserver&&) = default;
+    virtual ~TipObserver() = default;
+
+    /// `block` now extends the active chain, and `entry` is its place in the index.
+    virtual void BlockConnected(const Block& block, const BlockIndexEntry& entry) = 0;
+
+    /// `block` has been reversed and is no longer on the active chain. The coins set has
+    /// already been restored to the state before it, so the outputs it created are gone and
+    /// the coins it spent are unspent again.
+    virtual void BlockDisconnected(const Block& block, const BlockIndexEntry& entry) = 0;
+};
+
 /// The active chain, the coins set that corresponds to it, and the operations that move
 /// both together.
 ///
@@ -293,6 +344,20 @@ public:
     /// The applied tip. Never null.
     [[nodiscard]] const BlockIndexEntry& Tip() const noexcept;
 
+    /// The unspent outputs as of the applied tip, for reading only.
+    ///
+    /// Exposed because judging a transaction that has not been mined — which is what a
+    /// mempool does, and what an RPC that accepts one needs — requires exactly the coins
+    /// set that corresponds to the current tip, and this class is the only thing that
+    /// knows the two are in step. The alternative is for a node to carry the set around
+    /// separately from the state that maintains it, which is the pairing this class exists
+    /// to make impossible to get wrong.
+    ///
+    /// Read-only, and that is the whole reason it is safe: the invariant is a property of
+    /// *changes* to the set, so a caller that can only look cannot break it.
+    /// `utxo::CoinsSink`, the half that writes, is not part of what is returned.
+    [[nodiscard]] const utxo::CoinsView& Coins() const noexcept { return *coins_; }
+
     /// Directs every change of recorded state through `sink`, which must outlive this state.
     ///
     /// Optional, and its absence is not a stub: a state with no sink is a complete in-memory
@@ -300,6 +365,17 @@ public:
     /// keep its data has. Attaching one does not retroactively persist anything, so it
     /// belongs immediately after construction and before the first `AcceptBlock`.
     void PersistTo(ChainSink& sink) noexcept { sink_ = &sink; }
+
+    /// Reports every block this state connects or reverses to `observer`, which must
+    /// outlive this state.
+    ///
+    /// Optional, and its absence is not a stub for the same reason a missing sink is not:
+    /// a chain with nobody watching it is a complete chain, and that is what every test of
+    /// activation in this repository is. One observer rather than a list, because there is
+    /// one thing above this layer that assembles the node's reaction to a new tip and
+    /// giving this class a fan-out would put the ordering of unrelated observers' side
+    /// effects into the layer least able to reason about them.
+    void ObserveWith(TipObserver& observer) noexcept { observer_ = &observer; }
 
     /// Restores the active chain as the path from genesis up to `tip`, applying nothing.
     ///
@@ -364,6 +440,7 @@ private:
     BlockStore* store_;
     const ChainParams* params_;
     ChainSink* sink_ = nullptr;
+    TipObserver* observer_ = nullptr;
     ActiveChain chain_;
 };
 
