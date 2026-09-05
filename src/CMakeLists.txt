@@ -66,6 +66,22 @@ add_library(amarian_consensus STATIC
 target_link_libraries(amarian_consensus PUBLIC amarian::primitives)
 add_library(amarian::consensus ALIAS amarian_consensus)
 
+# --- utxo: the set of unspent coins, and applying a block to it -------------
+# Sits above consensus and below chain. It owns *which* coins exist and how a block
+# moves the set forward or back; it decides no rules of its own beyond the ones a
+# lookup can answer, and reports every rejection with consensus's vocabulary.
+#
+# Links only consensus, and so transitively only primitives: no storage engine, no
+# networking. A persistent backend implements the `CoinsView` interface from the
+# storage layer above rather than being reached down to from here, which is what keeps
+# a database out of the code path that decides validity.
+add_library(amarian_utxo STATIC
+    utxo/coins.cpp
+    utxo/connect.cpp
+)
+target_link_libraries(amarian_utxo PUBLIC amarian::consensus)
+add_library(amarian::utxo ALIAS amarian_utxo)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to

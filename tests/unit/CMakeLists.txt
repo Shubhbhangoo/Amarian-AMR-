@@ -42,6 +42,12 @@ amarian_add_test(test_consensus unit
 # API to a test.
 target_link_libraries(test_consensus PRIVATE amarian::consensus amarian::openssl)
 
+amarian_add_test(test_utxo unit
+    utxo_coins_test.cpp
+    utxo_connect_test.cpp
+)
+target_link_libraries(test_utxo PRIVATE amarian::utxo)
+
 amarian_add_test(test_version unit
     version_test.cpp
 )
