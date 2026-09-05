@@ -1,3 +1,7 @@
+# The `consensus` label is carried by the three layers where a bug is a chain split:
+# consensus, utxo and chain. Not primitives, util or crypto — a canonical-encoding bug is
+# just as fatal, but a gate that covers every layer is a gate that says nothing about which
+# question it answered, and those layers are what `ctest -L unit` is for.
 amarian_add_test(test_util unit
     util_args_test.cpp
     util_hex_test.cpp
@@ -28,7 +32,7 @@ amarian_add_test(test_primitives unit
 )
 target_link_libraries(test_primitives PRIVATE amarian::primitives)
 
-amarian_add_test(test_consensus unit
+amarian_add_test(test_consensus "unit;consensus"
     consensus_genesis_test.cpp
     consensus_issuance_test.cpp
     consensus_params_test.cpp
@@ -43,13 +47,13 @@ amarian_add_test(test_consensus unit
 # API to a test.
 target_link_libraries(test_consensus PRIVATE amarian::consensus amarian::openssl)
 
-amarian_add_test(test_utxo unit
+amarian_add_test(test_utxo "unit;consensus"
     utxo_coins_test.cpp
     utxo_connect_test.cpp
 )
 target_link_libraries(test_utxo PRIVATE amarian::utxo)
 
-amarian_add_test(test_chain unit
+amarian_add_test(test_chain "unit;consensus"
     chain_block_index_test.cpp
 )
 target_link_libraries(test_chain PRIVATE amarian::chain)
