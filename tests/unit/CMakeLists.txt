@@ -22,6 +22,14 @@ amarian_add_test(test_primitives unit
 )
 target_link_libraries(test_primitives PRIVATE amarian::primitives)
 
+amarian_add_test(test_consensus unit
+    consensus_genesis_test.cpp
+    consensus_issuance_test.cpp
+    consensus_params_test.cpp
+    consensus_target_test.cpp
+)
+target_link_libraries(test_consensus PRIVATE amarian::consensus)
+
 amarian_add_test(test_version unit
     version_test.cpp
 )

@@ -1,18 +1,22 @@
 /// \file
 /// The Amarian node daemon.
 ///
-/// Phase 0 scope: option handling, logging setup, and build identification.
-/// The chain, storage and networking layers are introduced in later phases and
-/// wired in here. The binary deliberately does not pretend to do more than it
-/// does — `amariand --version` and `--build-info` are real, and everything else
-/// reports honestly that it is not yet available.
+/// Phase 0/1 scope: option handling, network selection, logging setup, build
+/// identification, and the startup check that this build's genesis parameters are the
+/// ones the selected network actually uses. The chain, storage and networking layers
+/// are introduced in later phases and wired in here. The binary deliberately does not
+/// pretend to do more than it does — `--version`, `--build-info` and `--chain` are
+/// real, and everything else reports honestly that it is not yet available.
 
+#include <amarian/consensus/genesis.hpp>
+#include <amarian/consensus/params.hpp>
 #include <amarian/util/args.hpp>
 #include <amarian/util/logging.hpp>
 #include <amarian/version.hpp>
 
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 namespace amarian {
@@ -36,6 +40,10 @@ void RegisterOptions(ArgsParser& parser) {
     parser.Add({.name = "build-info",
                 .kind = ArgKind::Flag,
                 .help = "Print compiler, hardening and crypto library details, then exit."});
+    parser.Add({.name = "chain",
+                .kind = ArgKind::String,
+                .value_hint = "<network>",
+                .help = "One of mainnet, testnet, regtest. Default: mainnet."});
     parser.Add({.name = "log-level",
                 .kind = ArgKind::String,
                 .value_hint = "<level>",
@@ -97,6 +105,53 @@ bool ConfigureLogging(const ArgsParser& parser) {
     return true;
 }
 
+/// Resolves --chain. Returns nullopt after reporting a usage error.
+///
+/// An unrecognised name is an error and never a default: silently falling back to the
+/// network that holds real value is the wrong way to be wrong.
+std::optional<Network> SelectNetwork(const ArgsParser& parser) {
+    if (!parser.Has("chain")) {
+        return Network::Mainnet;
+    }
+    const std::string name = parser.GetString("chain");
+    const std::optional<Network> network = NetworkFromName(name);
+    if (!network.has_value()) {
+        std::fprintf(stderr,
+                     "amariand: unknown --chain '%s' (expected mainnet, testnet or regtest)\n",
+                     name.c_str());
+        return std::nullopt;
+    }
+    return network;
+}
+
+/// Verifies that this build's genesis parameters are the selected network's, and
+/// reports the identity a node operator needs to confirm they are on the right chain.
+///
+/// A node whose block 0 differs from the network's shares no history with it at all,
+/// so this is a refusal to start rather than a warning.
+bool ReportChainIdentity(const ChainParams& params) {
+    if (const GenesisFault fault = CheckGenesis(params); fault != GenesisFault::None) {
+        AMARIAN_ERROR(log::Category::General,
+                      "genesis check failed for {}: {}",
+                      params.name,
+                      Describe(fault));
+        return false;
+    }
+
+    AMARIAN_INFO(
+        log::Category::General, "network {} (chain_id {})", params.name, params.chain_id.ToHex());
+    AMARIAN_INFO(log::Category::General,
+                 "magic {:02x}{:02x}{:02x}{:02x}, p2p port {}, rpc port {}",
+                 params.magic[0],
+                 params.magic[1],
+                 params.magic[2],
+                 params.magic[3],
+                 params.default_p2p_port,
+                 params.default_rpc_port);
+    AMARIAN_INFO(log::Category::General, "genesis {}", params.genesis_hash.ToHex());
+    return true;
+}
+
 int Run(int argc, char* argv[]) {
     ArgsParser parser("amariand", "[options]");
     RegisterOptions(parser);
@@ -130,15 +185,24 @@ int Run(int argc, char* argv[]) {
         return EXIT_USAGE;
     }
 
+    const std::optional<Network> network = SelectNetwork(parser);
+    if (!network.has_value()) {
+        return EXIT_USAGE;
+    }
+
     AMARIAN_INFO(log::Category::General, "Amarian {} starting", VersionStringLong());
     AMARIAN_INFO(log::Category::General, "user agent {}", UserAgent());
+
+    if (!ReportChainIdentity(ParamsFor(*network))) {
+        return EXIT_FAILURE;
+    }
 
     // Phase 1 replaces this with chainstate initialisation, block index load and
     // the node event loop. Reporting the gap is preferable to a silent no-op that
     // looks like a successful node start.
     AMARIAN_ERROR(log::Category::General,
-                  "no chain backend in this build: the consensus, storage and network layers "
-                  "land in Phase 1. Run with --build-info to inspect this build.");
+                  "no chain backend in this build: block storage, validation and the network "
+                  "layer land in Phase 1. Run with --build-info to inspect this build.");
     return EXIT_FAILURE;
 }
 

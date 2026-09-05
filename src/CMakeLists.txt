@@ -43,6 +43,18 @@ add_library(amarian_primitives STATIC
 target_link_libraries(amarian_primitives PUBLIC amarian::crypto)
 add_library(amarian::primitives ALIAS amarian_primitives)
 
+# --- consensus: the rules that decide validity ------------------------------
+# Deliberately links nothing but primitives. No storage, no networking, no
+# wallet, no RPC: the absence of those edges is what keeps the surface that
+# decides which chain is real small enough to audit, and CMake is where that
+# constraint is actually enforced rather than merely described.
+add_library(amarian_consensus STATIC
+    consensus/genesis.cpp
+    consensus/target.cpp
+)
+target_link_libraries(amarian_consensus PUBLIC amarian::primitives)
+add_library(amarian::consensus ALIAS amarian_consensus)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
@@ -57,4 +69,14 @@ add_library(amarian::version ALIAS amarian_version)
 add_executable(amariand
     node/amariand.cpp
 )
-target_link_libraries(amariand PRIVATE amarian::util amarian::version)
+target_link_libraries(amariand PRIVATE amarian::consensus amarian::util amarian::version)
+
+# --- amarian-genesis: prints, checks and regenerates genesis parameters -----
+# A tool rather than a test: it is how the recorded nonces were produced, and
+# keeping it means a reviewer can reproduce a consensus constant instead of
+# trusting it.
+find_package(Threads REQUIRED)
+add_executable(amarian-genesis
+    tools/genesis_tool.cpp
+)
+target_link_libraries(amarian-genesis PRIVATE amarian::consensus Threads::Threads)
