@@ -14,16 +14,19 @@ advice.
 
 ## Status
 
-Phase 0 of 13 is complete. Amarian is part way through **Phase 1** — the
-minimal blockchain. The data types, hashing, signature verification, the full
-consensus rule set for a transaction and a block, the unspent output set with
-atomic application and reversal, the header tree that decides which chain has the
-most work, and the activation step that moves the node onto that chain all exist
-and are tested. There is a chain now, rather than a tree of candidates. What is
-missing is everything that makes it durable and shared: nothing yet survives a
-restart, and nothing yet arrives from another machine.
+**Phase 1 of 13 is complete.** A real Amarian node exists: it builds blocks, judges
+them by a full consensus rule set, keeps them in RocksDB, follows the branch with the
+most work, and survives a restart. Two independently launched nodes with separate data
+directories reach the same tip when one mines a chain and hands the raw blocks to the
+other — which is Phase 1's acceptance criterion, and it is checked by
+[scripts/phase1_acceptance.sh](scripts/phase1_acceptance.sh) rather than asserted here.
 
-What actually works today, verified by 246 passing tests across five presets:
+What is still missing is the network. Blocks move between nodes through a flat file
+today, not over a socket, and there is no mempool, no wallet and no RPC. Those are
+Phases 3 to 5.
+
+What actually works today, verified by 246 passing tests across five presets plus the
+acceptance script:
 
 | Component | State |
 |---|---|
@@ -34,9 +37,11 @@ What actually works today, verified by 246 passing tests across five presets:
 | `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation, the contextual input rules, accumulated work | working |
 | `utxo`: the unspent output set, atomic block application and reversal, undo records | working |
 | `chain`: the header tree, accumulated work per branch, the best-tip rule, the revert/apply plan between two tips, and the activation that carries it out | working |
-| `amariand --version` / `--build-info` / `--help`, chain identity and backend startup gates | working |
-| Persistence | **in progress** (Phase 1) |
-| Mining and difficulty adjustment | **not started** (Phase 3) |
+| `storage`: coins, block bodies, undo records, the header tree and the tip in RocksDB, atomic across all five | working |
+| `mining`: block assembly from the tip, self-checked against the node's own rules, and a bounded CPU nonce search | working |
+| `amariand`: data directory, chainstate restore, `--generate`, `--import-blocks`, `--export-blocks`, chain identity and backend startup gates | working |
+| Difficulty retargeting | **not started** (Phase 3) — the target is constant today, which is a complete rule and not a stub |
+| Mempool, fee selection and mining RPC | **not started** (Phase 3) |
 | P2P networking | **not started** (Phase 4) |
 | Wallet | **not started** (Phase 5) |
 | Post-quantum signatures | **verifiable in consensus**, not yet spendable — no wallet, address format or migration path (Phase 6) |
@@ -47,14 +52,11 @@ authorised by a real ML-DSA-44 signature passes consensus in the test suite.
 Nothing yet *creates* such an output, so the schemes are implemented but not
 usable. See [docs/PQ_CRYPTO.md](docs/PQ_CRYPTO.md#what-is-built-and-what-is-not).
 
-`amariand` still exits non-zero and says why, rather than pretending to start a
-node: persistence and the network layer are the remainder of Phase 1. A block can
-be validated, applied to the unspent output set, and made part of the active chain
-today, and a node can reorganise onto a heavier branch and back — all of it in
-memory, none of it shared. Nothing is written to disk and nothing is sent or
-received, so a restart loses the chain and a second node cannot learn of it. See
-[DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the current task, the next
-task, and open risks.
+There is no mempool, so a mined block carries its coinbase and nothing else. The fee
+term in the coinbase rule is present and is handed a real zero rather than an assumed
+one, so adding a mempool changes an expression in the assembler and no consensus rule
+anywhere. See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the current task, the
+next task, and open risks.
 
 Claims this project does **not** make yet, and will not make until there is
 evidence: that it is decentralised, that it is post-quantum secure, or that any
@@ -105,6 +107,37 @@ see [fuzz/README.md](fuzz/README.md).
 ```bash
 ./build/dev/src/amariand --build-info
 ```
+
+## Running a node
+
+A run opens the chain, does what it was asked, makes the database durable and exits.
+There is no event loop, because there is nothing yet to service — see decision 70.
+
+Mine five regtest blocks onto a fresh chain, paying the reward to a lock:
+
+```bash
+./build/dev/src/amariand --chain regtest --datadir /tmp/amarian-a --generate 5 --payout 0120$(printf '11%.0s' $(seq 32))
+```
+
+Hand those blocks to a second, entirely separate node, which judges every one of them
+by its own rules:
+
+```bash
+./build/dev/src/amariand --chain regtest --datadir /tmp/amarian-a --export-blocks /tmp/blocks.dat
+```
+
+```bash
+./build/dev/src/amariand --chain regtest --datadir /tmp/amarian-b --import-blocks /tmp/blocks.dat
+```
+
+Both print the same `tip height 5 <hash>` line, and both still print it when run again
+with no arguments. `--payout` is the hex encoding of a `Lock`: a version byte, a
+compact-size length, then the program. The one above is a version-1 commitment lock
+over 32 bytes, which is spendable in shape but not by anyone — there is no wallet yet,
+so nothing can construct a lock whose coins it could later move.
+
+`--datadir` defaults to `$HOME/.amarian/<network>`, one directory per network. Opening
+one network's directory as another is refused rather than reconciled.
 
 ## Repository layout
 

@@ -7,9 +7,13 @@ before there was an implementation defending them. Much of it is now implemented
 not. Exactly which is which is listed in [the gap section](#the-gap-between-this-document-and-the-code)
 at the end, and that list is updated as each component lands rather than left to rot.
 
-Every structure here is subject to change until the Phase 1 acceptance criterion passes — two
-local nodes independently validating the same chain — after which the serialised formats are
-frozen, because a format change after that point is a hard fork.
+The Phase 1 acceptance criterion has passed — two independently launched nodes reach the same
+tip from the same blocks — so the serialised formats above are now **frozen**: a change to any
+of them is a hard fork, and is treated as one rather than as an edit. No public chain runs yet,
+so the practical cost of breaking that rule today is regenerating the genesis blocks and
+discarding every stored chain, not splitting a live network. It is still a hard fork, and the
+freeze holds because the point of the rule is to stop the formats drifting while the layers
+above them are being built.
 
 Where a value is genuinely undecided it says so. Where a value is decided, the
 reason is given, because a specification that lists field widths without saying why
@@ -815,6 +819,67 @@ cores ran it. `amarian-genesis` with no arguments prints each network's paramete
 its `CheckGenesis` verdict, which is how a reviewer reproduces a consensus constant
 instead of trusting it.
 
+## Producing a block
+
+Every rule above answers *is this block allowed*. This section is the only one that answers
+*what block should exist next*, and the distinction matters enough that the code keeps the two
+in separate libraries — `amarian::mining` and `amarian::consensus` — so that a mistake cannot be
+checked by the expression that produced it.
+
+Four of the next block's fields are not choices:
+
+| Field | Computed from |
+|---|---|
+| `height` | the tip's height plus one |
+| `prev_block` | the tip's hash |
+| `target_bits` | `NextTargetBits` over the tip, exactly as `ContextualCheckBlockHeader` recomputes it |
+| coinbase amount | `BlockReward(height)` plus the fees of the transactions included |
+
+An assembler that took any of these from a caller would be turning the rules that check them
+into tests it could fail. Computing them from the same functions the rules use makes those rules
+tautologies for an honest miner and refusals for a dishonest one.
+
+Three fields are genuine choices, because consensus permits a range:
+
+- **`timestamp`** — strictly after the median of the eleven blocks ending at the tip, and no more
+  than `MAX_FUTURE_BLOCK_SECONDS` ahead of the receiving node's clock. Amarian's assembler uses
+  `max(now, median + 1)`, raising to satisfy the lower bound but never lowering to satisfy the
+  upper one: a clock far ahead of the network is a fault on that machine, and hiding it would
+  produce blocks peers silently refuse.
+- **The payout lock** — who receives the reward is not a consensus question.
+- **`coinbase_data`** — arbitrary bytes, at most `max_coinbase_data_size`. This is the
+  extranonce. It sits outside the `txid` and inside the `wtxid`, so changing it changes the
+  Merkle root, and therefore the header being searched, without changing what the coinbase pays.
+  It is also what makes two miners with the same payout search different work.
+
+The nonce is the last field in the header's 92-byte layout so that the first 84 bytes are
+constant across a search. A solver rewrites eight bytes and rehashes; nothing else moves.
+
+## Block files
+
+Until the P2P layer exists, blocks move between nodes as a file. The format is one record per
+block, lowest height first:
+
+| Field | Width | Meaning |
+|---|---|---|
+| `magic` | 4 | the network's magic, repeated per record |
+| `length` | 4 | the encoded block's length in bytes, little-endian |
+| `block` | `length` | the block, in the encoding specified above |
+
+The magic is repeated on every record rather than written once as a header, so a reader that
+starts part way into a file — or a file that has been concatenated with another — fails on the
+first record from the wrong network instead of misparsing a block. `length` lets a reader skip a
+record without decoding it. This is the same framing, for the same reasons, as Bitcoin's
+bootstrap files.
+
+Genesis is not included. It is a chain parameter that every node rebuilds from its own
+`BuildGenesisBlock`, so a file has nothing to tell an importer about block 0.
+
+A file carries no authority. It is not signed, it says nothing about who produced it, and it
+carries no work of its own — every block in it is judged by the importing node exactly as a
+block from a stranger would be. That is what makes it a valid way to demonstrate two
+independent nodes agreeing: the agreement can only have come from the rules.
+
 ## What is not specified yet
 
 | Area | State |
@@ -860,14 +925,23 @@ of provably unspendable outputs, and `ConnectBlock`/`DisconnectBlock` with the u
 and its encoding; and **the block index and chain selection** — accumulated work as a
 measured 256-bit quantity, the tree of known headers with each entry's validation state and
 failure inheritance, the most-work-then-first-seen selection rule, the context a header is
-judged against gathered from the chain, and the plan for moving from one tip to another.
+judged against gathered from the chain, and the plan for moving from one tip to another;
+**activation**, as `ChainState::AcceptBlock` and `ActivateBestChain` — the plan above driving
+`ConnectBlock` and `DisconnectBlock` over the unspent output set, so the tip the node reports
+and the coins it holds are the same chain at every step; **persistence** — the coins, the block
+bodies, the undo records, the header tree and the tip in RocksDB, written atomically across all
+five so that a crash cannot leave a tip naming a chain whose coins were never applied, and the
+restore that re-judges every stored header by the rules it passed when it arrived; **block
+assembly**, as `mining::BuildBlockTemplate` and `SolveHeader` — the section "Producing a block"
+above, with the template self-checked against `ContextualCheckBlockHeader` and
+`CheckCoinbaseAmount` before it is handed back; and **the block file transport** — the framing
+in "Block files" above, as `amariand --export-blocks` and `--import-blocks`.
 
-**Specified here but not yet implemented:** activating a selected chain, so that the plan
-above actually drives `ConnectBlock` and `DisconnectBlock` over the unspent output set;
-persistence, so the set, the blocks and the undo records survive a restart; the P2P
-protocol; the wallet; and difficulty retargeting, which is Phase 3 work and deliberately not
-attempted early — a child currently inherits its predecessor's target, clamped to the
-network floor, which is a complete rule and the final one for regtest.
+**Specified here but not yet implemented:** the P2P protocol; the mempool, and with it fee
+selection and any transaction in a block other than its coinbase; the wallet; and difficulty
+retargeting, which is Phase 3 work and deliberately not attempted early — a child currently
+inherits its predecessor's target, clamped to the network floor, which is a complete rule and
+the final one for regtest.
 
 A block that passes `CheckBlock` is therefore **still not valid on its own**: `CheckBlock` is
 context-free and does not touch the UTXO set, because the coins being spent are not something
@@ -877,14 +951,20 @@ a block carries. Validity now means `CheckBlockHeader` and `ContextualCheckBlock
 function is named for the half it actually does, and nothing in the code is allowed to imply
 that any one of them alone is enough.
 
-A node now follows the chain it names. The index produces a `ChainSwitch` saying exactly what
-to revert and what to apply, and `ChainState::ActivateBestChain` carries it out, keeping the
-unspent output set in step with the tip at every block. So a chain exists rather than a tree of
-candidates — but only in memory. What remains of Phase 1 is durability and sharing: nothing is
-written to disk, and nothing is exchanged with another node, so the acceptance test for the
-phase — two nodes independently validating the same chain — has no second node to run against.
+A node now follows the chain it names, and keeps it. The index produces a `ChainSwitch` saying
+exactly what to revert and what to apply, `ChainState::ActivateBestChain` carries it out keeping
+the unspent output set in step with the tip at every block, and the whole of it — coins, bodies,
+undo records, header tree and tip — is in RocksDB, so the chain survives the process that built
+it. Two nodes launched separately, with separate data directories, reach the same tip when one
+mines a chain and hands the raw blocks to the other: the Phase 1 acceptance criterion, checked
+by [scripts/phase1_acceptance.sh](../scripts/phase1_acceptance.sh) rather than asserted here.
 
-
+The transport is the weakest one available on purpose. A file carries no work and no authority,
+so the importer's agreement can only have come from running the rules in this document over the
+blocks it was given. What is still missing is not validation but reach: no socket, so the second
+node has to be handed a file by an operator; and no mempool, so a mined block carries its
+coinbase and nothing else. Both are named phases, not gaps in the rules — the fee term in the
+coinbase rule is already present and is handed a real zero rather than an assumed one.
 Where this document and the code disagree, the code is what the network runs, and the
 disagreement is a bug in one of them.
 

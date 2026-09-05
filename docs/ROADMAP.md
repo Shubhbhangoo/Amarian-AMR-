@@ -19,8 +19,8 @@ the whole project; that file is where it actually is.
 | Phase | Subject | Acceptance criterion | State |
 |---|---|---|---|
 | 0 | Environment and architecture | Clean build, clean test command, a real executable, project documentation | **complete** |
-| 1 | Minimal blockchain | Two local nodes independently validate the same chain | in progress |
-| 2 | Hard-cap monetary system | Invalid inflation attempts are rejected | not started |
+| 1 | Minimal blockchain | Two local nodes independently validate the same chain | **complete** |
+| 2 | Hard-cap monetary system | Invalid inflation attempts are rejected | not started — current phase |
 | 3 | Mining and difficulty | A local miner produces valid blocks another node independently verifies | not started |
 | 4 | Peer-to-peer networking | Two or more independent nodes discover each other, synchronise, and converge | not started |
 | 5 | Wallet | Create an address, acquire coins, send, receive on another node | not started |
@@ -60,6 +60,18 @@ Needs: canonical serialisation; block and transaction primitives; the Merkle
 root; the compact target encoding; SHA-256d proof-of-work checking; a genesis
 block; the UTXO set; and persistence, so that a node restarted from disk agrees
 with one that has been running.
+
+**Met on 2026-09-05**, and demonstrated rather than asserted:
+[scripts/phase1_acceptance.sh](../scripts/phase1_acceptance.sh) mines five regtest blocks on
+one node, hands the raw blocks to a second node with a separate data directory that has never
+seen the first, and asserts that the second refuses none of them and reaches the identical tip
+hash and identical accumulated work — then that both nodes report that tip again after a
+restart, and that a testnet node refuses both the file and the data directory. The transport is
+a flat file rather than a socket precisely because it carries no work and no authority, so the
+agreement can only have come from the second node's own rules. Everything above went in: the
+codec, the primitives, the validation rules, the unspent output set, the header tree with
+accumulated work, activation, the RocksDB chainstate, and block assembly with a bounded nonce
+search.
 
 ## Phase 2 — Hard-cap monetary system
 

@@ -4,16 +4,20 @@ Living record of where the project actually is. Updated as work lands, not as
 work is planned. Anything not listed as done is not done.
 
 **Last updated:** 2026-09-05
-**Current phase:** Phase 1 — Minimal blockchain
+**Current phase:** Phase 2 — Hard-cap monetary system
 **Phase 0 status:** complete
-**Phase 1 status:** in progress. Canonical encoding, consensus hashing, the
-transaction and block primitives, the chain parameters, the compact target codec, the
-issuance schedule, genesis for all three networks, the context-free validation rules,
-the signature scheme registry, the signature hash, spend authorisation, the two
-contextual transaction rules that need chain state — that an input's outpoint exists and
-is unspent, and coinbase maturity — and the unspent output set with atomic block
-application and reversal have landed. Chain selection, chainstate persistence and the
-two-node acceptance test remain.
+**Phase 1 status:** complete. The acceptance criterion is met: two independently launched
+nodes, with separate data directories, reach the same tip when one mines a chain and hands
+the raw blocks to the other, and both still report that tip after a restart. Checked by
+[scripts/phase1_acceptance.sh](scripts/phase1_acceptance.sh), not asserted here. What landed
+in the phase: canonical encoding, consensus hashing, the transaction and block primitives,
+the chain parameters, the compact target codec, the issuance schedule, genesis for all three
+networks, the context-free validation rules, the signature scheme registry, the signature
+hash, spend authorisation, the two contextual transaction rules that need chain state, the
+unspent output set with atomic application and reversal, the header tree with accumulated
+work and the best-tip rule, activation over the coins set, the RocksDB chainstate, block
+assembly with a bounded nonce search, and a node that ties all of it together.
+**Phase 2 status:** not started.
 
 ---
 
@@ -28,8 +32,16 @@ two-node acceptance test remain.
 
 ## Phase 1 acceptance criteria
 
-Acceptance is one criterion and it is not met yet: **two local nodes independently
-validate the same chain.** Progress towards it, by component:
+Acceptance is one criterion and it is **met**: **two local nodes independently validate the
+same chain.** The evidence is a script rather than a paragraph —
+[scripts/phase1_acceptance.sh](scripts/phase1_acceptance.sh), nine assertions over six steps,
+transcript under Test results below. Node A mines five regtest blocks onto a fresh chain and
+exports them; node B, a data directory that has never seen node A, imports the file, refuses
+none, applies all five, and reports the identical tip hash and identical accumulated work;
+both nodes re-report that tip when run again with no arguments; and a testnet node refuses
+both the regtest file, on its magic, and the regtest data directory, on its `chain_id`.
+
+The components, all landed:
 
 | Component | State |
 |---|---|
@@ -51,8 +63,10 @@ validate the same chain.** Progress towards it, by component:
 | Block index and chain selection | landed — `amarian::chain::BlockIndex`: the header tree, work per branch, the best-tip rule with a first-seen tie-break, inherited rejection, and `PlanChainSwitch`; 17 `test_chain` tests over real mined regtest headers |
 | Applying a chain switch (`ActivateBestChain`) | landed — `amarian::chain::ChainState`: the active chain indexed by height, `AcceptBlock`, and an activation loop that reverses and applies blocks so the coins set follows the tip. Per-block atomicity, and a body-availability guard that makes a tip regression impossible rather than unlikely. Covered by the existing `test_chain` and `test_utxo` suites; a dedicated body-withholding test belongs with the P2P layer that can actually withhold |
 | Block and undo storage behind an interface | landed — `amarian::chain::BlockStore` with a complete in-memory implementation, so `chain` still links no database |
-| RocksDB chainstate persistence | not started — the next component: a `CoinsView`/`CoinsSink` and a `BlockStore` over storage |
-| Node wiring and the two-node integration test | not started |
+| RocksDB chainstate persistence | landed — `amarian::storage::ChainDb`: one database, five column families (`coins`, `blocks`, `undo`, `index`, `meta`), one write batch per block so a crash cannot leave a tip naming a chain whose coins were never applied. Implements `utxo::CoinsView`, `chain::BlockStore` and `chain::ChainSink`, so nothing below it links RocksDB. `LoadChain` re-judges every stored header on restore |
+| Block assembly and the nonce search | landed — `amarian::mining`: `BuildBlockTemplate` computes height, previous hash, target and reward from the tip and self-checks the result against `ContextualCheckBlockHeader` and `CheckCoinbaseAmount`; `SolveHeader` searches a caller-bounded number of nonces |
+| Node wiring | landed — `amariand` opens a data directory, restores the chain, applies anything accepted but not yet applied, and does what it was asked: `--generate`, `--import-blocks`, `--export-blocks`. One `Sync()` at the end, and a latched storage fault fails the run |
+| Two independent nodes on the same chain | landed — `scripts/phase1_acceptance.sh`, the criterion above |
 
 Difficulty *retargeting* is deliberately not on this list: Phase 1 uses a constant
 target, and the retarget algorithm arrives in Phase 3 where it can be evaluated
@@ -211,7 +225,7 @@ against simulated hashrate rather than asserted.
 - Genesis is mined, recorded, and recomputed at node startup: `amariand --chain`
   refuses to run if this build's block 0 is not the selected network's, because a node
   whose block 0 differs shares no history with the network at all.
-- `ValidationError` names 48 distinct rules with no shared "invalid" value, so
+- `ValidationError` names 52 distinct rules with no shared "invalid" value, so
   rejection allocates nothing on an attacker-driven path. `Describe` turns one into
   text at the edges only, over a total `switch` with no `default`.
 - The context-free rules — `CheckSpendCondition`, `CheckWitness`, `CheckTransaction`,
@@ -302,10 +316,82 @@ against simulated hashrate rather than asserted.
   rejected block could have left the real set edited. Deleting the copy operations makes
   the mistake unwritable rather than merely documented.
 
+**Chain selection and activation**
+
+- `amarian::chain` — the tree of known headers, the work on each branch, and the walk from
+  one tip to another. Above `utxo` because activating a chain means applying blocks to the
+  coins set; below storage and networking, so the code that decides which chain is real is
+  testable without either.
+- Work is a measured 256-bit quantity, not a float and not a height count. `Work` adds
+  saturating and compares exactly, and agrees with Bitcoin's published difficulty-one
+  chainwork constant, which is the only external check available for it.
+- Selection is **most work, then first seen**. The tie-break is not cosmetic: two branches of
+  equal work with no rule to separate them is a permanent split, and first-seen at least makes
+  each node's choice a function of what it observed rather than of pointer order.
+- A rejected header poisons its descendants by inheritance, so a node that has judged a block
+  invalid never re-judges its children one at a time — an attacker cannot make a node pay for
+  a long chain built on a block it already refused.
+- `PlanChainSwitch` answers *what would have to be reverted and applied* as a value, before
+  anything is touched. `ChainState::ActivateBestChain` carries the plan out one block at a
+  time, each block atomic, and stops rather than continuing if a body it needs is missing —
+  which makes a tip regression impossible by construction instead of unlikely.
+- Every rule the chain layer applies is reported in `consensus`'s vocabulary. The layer decides
+  nothing a lookup cannot answer.
+
+**Persistence**
+
+- `amarian::storage::ChainDb` — one RocksDB instance, five column families: `coins`, `blocks`,
+  `undo`, `index`, `meta`. The only layer in the project permitted to link a database, and
+  `amarian::rocksdb` is `PRIVATE`, so a target linking `amarian::storage` gets Amarian's
+  interface and not RocksDB's headers.
+- It implements interfaces defined *below* it — `utxo::CoinsView`, `chain::BlockStore`,
+  `chain::ChainSink` — rather than being reached down to. That direction is the whole point: a
+  bug in RocksDB's option handling cannot reach the code that decides whether a block is valid,
+  because that code cannot see RocksDB at all.
+- One write batch per block covers the coins, the body, the undo record, the index entry and
+  the tip together. A crash therefore cannot leave a tip naming a chain whose coins were never
+  applied, which is the failure that would be silent and unrecoverable.
+- A read that fails, or a write reported as done that was not, **latches a fault**. A run that
+  latched one fails even if every step returned, because the tip it would print may name a
+  chain whose coins or bodies are not all there.
+- The data directory carries the network's `chain_id`; opening one network's directory as
+  another is refused rather than reconciled. Together with one directory per network by
+  default, that is two independent guards against writing blocks that cost nothing over state
+  that did not.
+- `LoadChain` rebuilds the header tree on restore and re-judges every stored header by the
+  rules it passed when it arrived, so a tampered database is caught before any branch is
+  weighed.
+
+**Block assembly**
+
+- `amarian::mining` — the only layer that answers *what block should exist next*; every other
+  layer answers *is this block allowed*. A separate target from consensus on purpose: an
+  assembler sharing a translation unit with the validator could produce a block that passes
+  because both agree on a mistake.
+- `BuildBlockTemplate` computes height, previous hash, target and reward from the tip, using
+  the same functions the rules use, and then **self-checks** the result against
+  `ContextualCheckBlockHeader` and `CheckCoinbaseAmount` — exactly the proof-of-work-independent
+  half of validation, which is what makes the check possible before a nonce exists.
+- The miner chooses three things and nothing else: the timestamp, the payout lock and the
+  extranonce bytes. An unspendable payout is refused rather than mined to.
+- `SolveHeader` searches a caller-bounded number of nonces and reports whether it found one. A
+  budget rather than a loop that runs to completion, so the caller stays in control of a
+  process that may not terminate.
+
 **Node**
 
-- `amariand` with `--version`, `--build-info`, `--help` and logging options.
-  Exits non-zero with an explicit message instead of pretending to run a node.
+- `amariand` opens a data directory, restores the chain from it, applies anything accepted but
+  not yet applied, does what it was asked — `--generate`, `--import-blocks`,
+  `--export-blocks` — makes the database durable with one `Sync()`, and exits.
+- No event loop, because there is nothing yet to service. The network layer is Phase 4; until
+  it exists, a process sitting in a loop would be idling while claiming to be a node. A run
+  that starts, works and exits is also what makes the two-node comparison possible today.
+- Blocks move between nodes as a framed flat file: `magic ‖ uint32 length ‖ block` per record,
+  the magic repeated so a foreign file fails on its first record instead of misparsing a block.
+  A file carries no work and no authority, which is precisely why an importer reaching the
+  exporter's tip demonstrates its own consensus code agreeing.
+- Every clock read in the node happens in one file and is passed down as a value, so a node's
+  verdict is reproducible from a transcript.
 - Two startup checks, both refusals rather than warnings. Every registered signature
   scheme must be usable from this build's backend, because a node that cannot verify a
   consensus scheme would accept spends under it unchecked. And this build's block 0
@@ -349,18 +435,22 @@ against simulated hashrate rather than asserted.
   one states what is implemented and what is design intent, because a document
   that reads as a specification of working software when the software does not
   exist is the most expensive kind of wrong.
-- [docs/DECISIONS.md](docs/DECISIONS.md) records 63 decisions with the evidence
+- [docs/DECISIONS.md](docs/DECISIONS.md) records 76 decisions with the evidence
   behind each and the condition that would reverse it.
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) enumerates attack classes with a
-  per-class *Tested* column. Thirty-eight individual rows now read **yes**; the
-  spend-authorisation class went from "no verification" to fully implemented, and the
-  supply class closed its last two open rows — the coinbase fee bound and the phantom
-  fee claim — when the UTXO set landed, both on 2026-09-05. That column is the input to
-  Phase 9, whose criterion is that every row has a test that fails when the defence is
-  removed — strictly stronger than what a **yes** claims today.
-- [docs/AMARIAN_PROTOCOL.md](docs/AMARIAN_PROTOCOL.md),
-  [docs/NETWORK.md](docs/NETWORK.md) and [docs/WALLET.md](docs/WALLET.md) are
-  design intent for Phases 1, 4 and 5 and are labelled as such at the top.
+  per-class *Tested* column. Thirty-two individual rows read **yes** and thirteen
+  **partial**, counted by `grep` over the tables rather than recalled; the
+  spend-authorisation class went from "no verification" to fully implemented, the supply
+  class closed its last two open rows — the coinbase fee bound and the phantom fee claim —
+  when the UTXO set landed, and Phase 1's close added rows for a foreign block file, a
+  hostile block file and an unspendable payout. That column is the input to Phase 9, whose
+  criterion is that every row has a test that fails when the defence is removed — strictly
+  stronger than what a **yes** claims today.
+- [docs/AMARIAN_PROTOCOL.md](docs/AMARIAN_PROTOCOL.md) is now largely a description of
+  working code rather than intent — its gap section lists exactly which parts are which, and
+  the serialised formats are frozen now that the Phase 1 criterion has passed.
+  [docs/NETWORK.md](docs/NETWORK.md) and [docs/WALLET.md](docs/WALLET.md) remain design
+  intent for Phases 4 and 5 and are labelled as such at the top.
 
 **Post-quantum measurement campaign**
 
@@ -376,38 +466,34 @@ against simulated hashrate rather than asserted.
 
 ## Current task
 
-The block index and chain selection. With the unspent output set in place, every rule
-that consults a coin is enforced — but nothing yet decides *which* block to apply:
-`ConnectBlock` is handed a block and a height by a caller, and a caller that chooses
-wrongly is not something any rule below it can detect. The block index is what turns a
-pile of validated blocks into a chain: the tree of known headers, accumulated work per
-branch, a total order with deterministic tie-breaking, and the reorganisation walk that
-disconnects back to a fork point and connects forward along the new branch.
+Phase 2 — the hard-cap monetary system, whose acceptance criterion is that invalid inflation
+attempts are **rejected**, demonstrated rather than argued. The two halves that have to meet
+already have: `ConnectBlock` sums each transaction's fee from the coins it actually spent and
+hands the total to `CheckCoinbaseAmount`, so the cap is enforced per block from height with no
+running total to trust, and `MAX_MONEY` is a `static_assert` that sums the schedule at compile
+time.
 
-That last part is the reason the UTXO layer was built with an exact, atomic reversal
-rather than an approximate one. A reorganisation is where `DisconnectBlock` is called for
-real, and where "restores exactly what was removed" stops being a test assertion and
-becomes the thing standing between two nodes agreeing and two nodes silently disagreeing.
+So the code is largely in place and the work is adversarial rather than constructive: build the
+inflation attempts and confirm each is refused for the right reason. A coinbase paying more than
+`BlockReward(height)`; a coinbase claiming fees no input paid; a transaction whose outputs exceed
+its inputs; a spend of a coin that does not exist; a spend of the same coin twice, in one block
+and across two; a coinbase spent before maturity; an issuance claim at a height past 18 795 000,
+where the reward is zero and any coinbase output at all is a mint. These are the rows
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) marks Critical in the supply class, and the phase's
+criterion is that each one has a test that fails when the defence is removed — which is stronger
+than the **yes** those rows currently claim.
 
-Chain selection is also the row [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) marks
-"reorganisation without hashrate — this is the actual bug to hunt", and it is the only
-Critical row in the proof-of-work class that is a software defect rather than an economic
-property.
+This is the one place where the standing instruction to stop adding tests does not apply, because
+here the tests *are* the deliverable: a hard cap nobody has attacked is a claim, not a property.
 
 ## Next task
 
-RocksDB chainstate persistence — a `CoinsView` over storage, blocks and undo records on
-disk — then node wiring and the two-node integration test that closes Phase 1. The view
-interface was shaped for this: a storage-backed view is a new `CoinsView` subclass and
-nothing above it changes.
-
-After that, Phase 2 — hard-cap monetary system, with the acceptance criterion that
-invalid inflation attempts are rejected. The supply schedule is designed and analysed in
-[docs/ECONOMICS.md](docs/ECONOMICS.md), and the two halves that had to meet now have:
-`ConnectBlock` sums each transaction's fee from the coins it actually spent and hands the
-total to `CheckCoinbaseAmount`, so the cap is enforced per block from height with no
-running total to trust. Phase 2 is where that is adversarially tested rather than merely
-exercised.
+Phase 3 — mining and difficulty. Difficulty retargeting is the first genuinely new consensus rule
+since Phase 1: today a child inherits its predecessor's target clamped to the network floor,
+which is complete and final for regtest but not a real algorithm. It is deliberately deferred to
+a phase where it can be evaluated against simulated hashrate rather than asserted, and the
+mempool — and with it fee selection, a block containing anything but its coinbase, and a mining
+RPC — arrives with it.
 
 ## Blockers
 
@@ -429,7 +515,10 @@ None.
 
 Recorded from actual runs, 2026-09-05, 12 × 2.5 GHz x86-64.
 
-Full preset matrix, re-run after the unspent output set landed:
+Full preset matrix. The five test presets were re-run after the node wiring landed, by
+[scripts/test_matrix.sh](scripts/test_matrix.sh); the four build-only rows are from the last
+full [scripts/preset_matrix_check.sh](scripts/preset_matrix_check.sh) run, which is also what
+counts `warning:` lines across all nine.
 
 | preset | compiler | configuration | result |
 |---|---|---|---|
@@ -457,7 +546,8 @@ Genesis, verified end to end rather than asserted: `amarian-genesis --check` rep
 `amariand --chain <network>` recomputes block 0 from the recorded fields at startup
 and reports the matching chain id, magic and genesis hash for each.
 
-Startup on regtest, verbatim, as the record of what both gates actually print:
+Startup on regtest, from node A's acceptance log with the timestamps stripped, as the record of
+what the gates and the chainstate actually print on an empty data directory:
 
 ```
 [info] [general] signature scheme 1 schnorr-secp256k1 (classical, 32 byte key, 64 byte signature) via libsecp256k1
@@ -466,12 +556,35 @@ Startup on regtest, verbatim, as the record of what both gates actually print:
 [info] [general] network regtest (chain_id cca51fe05365e7cdd35bc3ef919f1c7426a2c6285a03028b98ddf143c0d4b975)
 [info] [general] magic f5b9d4c0, p2p port 12520, rpc port 12521
 [info] [general] genesis 02248d2fa761c196fd9a63f7a44c1efbca3acf2e882c3f1c707aba6237bda967
-[error] [general] no chain backend in this build: block storage, validation and the network layer land in Phase 1.
+[info] [general] chainstate at '/tmp/amarian_phase1/node_a'
+[info] [general] restored 0 stored header(s)
+[info] [general] tip height 0 02248d2fa761c196fd9a63f7a44c1efbca3acf2e882c3f1c707aba6237bda967 (work 0000000000000000000000000000000000000000000000000000000000000002)
 ```
 
 The key and signature sizes in those lines are read from the registry and cross-checked
 against the backend, so they are the sizes this build will actually accept — not the
 sizes the documentation claims.
+
+Phase 1 acceptance, 2026-09-05, from [scripts/phase1_acceptance.sh](scripts/phase1_acceptance.sh),
+nine assertions over six steps, all `ok`:
+
+- Node A, fresh regtest data directory, `--generate 5 --payout 0120<32 bytes of 0x11>`: mined
+  heights 1–5, nonces 0, 0, 5, 0 and 0 — trivially small, because regtest's target is the
+  floor — each paying 100 000 000 000 facets to a version 1 lock. Tip
+  `1afbab01fe9c92657c1acf7f7e09122b5d98a4cdaf3e7abf9d2b53b6a2a16bdc` at height 5, work
+  `…000c`, which is the genesis 2 plus 2 per block over five blocks.
+- `--export-blocks`: 5 blocks written.
+- Node B, a data directory that had never seen node A, `--import-blocks`: read 5, **refused 0**,
+  and reached the *identical* tip hash and the identical work. That is the criterion: the
+  agreement can only have come from node B's own rules, because the file carries no work and
+  no authority.
+- Both nodes re-run with no arguments: each restores 5 stored headers and reports the same tip,
+  so the chain survived the process that built it.
+- A testnet node refused the regtest file on its magic —
+  `'…/blocks.dat' is not a testnet block file: magic f5b9d4c0` — stopping at the first record
+  rather than refusing five blocks for reasons that would say nothing about the real fault.
+- The same testnet node refused node A's data directory outright: `cannot open the chainstate
+  at '…/node_a': the data directory holds another network's chain`.
 
 Fuzzing, 2026-09-05, ASan+UBSan with integer findings fatal:
 
@@ -510,7 +623,7 @@ consensus code.
 
 ## Architectural decisions
 
-Recorded with dates and reasoning in [docs/DECISIONS.md](docs/DECISIONS.md), now 47
+Recorded with dates and reasoning in [docs/DECISIONS.md](docs/DECISIONS.md), now 71
 entries. Four are summarised here because they changed the build, the fuzzing
 evidence, or a correctness guarantee that a test alone would not have caught:
 

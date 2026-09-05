@@ -1426,6 +1426,328 @@ knows. That is a legitimate state and the activation summary reports it.
 
 **Reversed if:** never on these grounds.
 
+### 64. Block assembly is a separate library from consensus
+
+**Implemented, 2026-09-05**, as `amarian::mining` in `src/mining/block_assembler.cpp`, linked by
+nothing except `amariand`.
+
+Every layer below it answers *is this block allowed*. This is the only one that answers *what
+block should exist next*, and the two questions must be answered by different code. An assembler
+sharing a translation unit with the validator would let a mistake become invisible: the block is
+built on an assumption, the assumption is then "checked" by the same expression that produced it,
+and it passes. Keeping them apart is what makes the assembler's output something the rules judge
+rather than something they assume.
+
+The dependency runs one way only. Mining links `chain`, because the height, the previous hash and
+the target all come from the tip. Nothing links mining in return, so no rule can consult a
+builder.
+
+**Consequence:** two computations of the next target exist in the process — the assembler's and
+`ContextualCheckBlockHeader`'s — and they must agree. That is the point, not a cost: they agree
+because both call `chain::NextTargetBits`, and if that ever stops being true the assembler finds
+out at build time instead of the network finding out later.
+
+**Reversed if:** never on these grounds. The separation is cheaper the larger the assembler gets.
+
+### 65. The assembler self-checks with exactly the proof-of-work-independent half of validation
+
+**Implemented, 2026-09-05**, as the `ContextualCheckBlockHeader` and `CheckCoinbaseAmount` calls
+at the end of `BuildBlockTemplate`.
+
+A template is judged before a single hash is spent on it, because a block this node's own rules
+refuse is a bug to report rather than work to pay for. But it cannot be judged by `CheckBlock`:
+that includes `HeaderInsufficientWork`, which an unsolved template fails by definition. Checking
+the wrong thing there would have meant either disabling the check or accepting a failure that
+means nothing, and both teach a reader to ignore it.
+
+So the self-check is the two calls that are proof-of-work-independent by construction — the
+height, the linkage, the expected target, both timestamp bounds, and the supply. Every field they
+judge was computed a few lines above from the same functions they use, which makes them
+tautologies for an honest miner and refusals for a dishonest one. A disagreement is always a bug
+in the assembler, and `TemplateError::HeaderRefused` and `RewardRefused` say so in as many words.
+
+**Consequence:** the solved block is still checked in full. It goes through `AcceptBlock`, which
+runs `CheckBlock` including the work check, exactly as a block from a stranger does.
+
+**Reversed if:** never. A cheaper self-check would be no self-check.
+
+### 66. A miner chooses the timestamp, the payout and the extranonce, and nothing else
+
+**Implemented, 2026-09-05**, as `BuildBlockTemplate`'s parameter list.
+
+The height, the previous hash, the target and the reward are computed from the tip. They are not
+parameters, and a caller has no way to express a preference about them. That is what makes the
+rules that check them tautologies rather than tests: `ContextualCheckBlockHeader` recomputes the
+target from the same `chain::NextTargetBits` the assembler called, so the only compact target that
+can appear in a block this node accepts is the one the assembler produces.
+
+The three that are chosen are chosen because consensus genuinely permits a range. The timestamp is
+`max(now, median-time-past + 1)`, saturating, and never lowered: a tip whose timestamps run ahead
+of this machine is a chain this node has already accepted, so its next block must still be
+mineable, while a clock far *ahead* of the network is a fault to fix on this machine rather than
+one to paper over in the assembler. The payout is free because who receives the reward is not a
+consensus question. The extranonce — `coinbase_data` — is free because it is arbitrary bytes by
+definition.
+
+**Consequence:** there is no `getblocktemplate`-shaped interface where a caller supplies fields. If
+Phase 3's mining RPC needs one, the fields a caller may set are exactly these three, and the RPC
+will have to say no to the rest.
+
+**Reversed if:** never for the four computed fields. That would be reintroducing the class of bug
+the split in decision 64 exists to prevent.
+
+### 67. The nonce search is a budget the caller controls, not a loop that runs to completion
+
+**Implemented, 2026-09-05**, as `SolveHeader(header, target, attempts)`.
+
+An unbounded search cannot be interrupted, and a node has things it must be able to do while
+mining: answer a shutdown, notice that a peer already published this height, roll the extranonce.
+None of them is reachable from inside a loop that does not return.
+
+`attempts` is a budget rather than a range because of what is left behind on failure: the *first
+untried* nonce, not the last tried one. n calls of one attempt therefore search exactly what one
+call of n attempts searches, so a caller can resume a search across as many calls as it likes
+without re-hashing anything it has already rejected, and without tracking where it was.
+
+Exhausting the 64-bit range returns false rather than wrapping. Wrapping would re-search nonces
+already known to fail, forever, and a caller could not tell that from a search still making
+progress.
+
+**Consequence:** `--generate` needs a default budget, and picking one is a judgement rather than a
+rule. `DEFAULT_GENERATE_ATTEMPTS` is 2^26: instant on regtest, and a difficulty a CPU cannot meet
+is reported in under a minute instead of spun on forever.
+
+**Reversed if:** a mining RPC needs a long-poll, which is a different shape again — but it needs
+this one underneath it.
+
+### 68. An unspendable payout lock is refused rather than mined to
+
+**Implemented, 2026-09-05**, as the `IsUnspendable()` check in `amariand`'s `ParsePayout`.
+
+Lock version 0 is a valid output and a legitimate thing to build — genesis pays to one, and the
+provable burn it gives is why the version exists (decision 11). But a *reward* sent there can never
+be moved by anyone, and the way an operator arrives at one is almost always a flag copied wrong or
+a default left in place, not an intention to destroy issuance.
+
+This is a node refusing to help make an irreversible mistake, not a consensus rule. Nothing about
+the block would be invalid; consensus has no opinion on who is paid. The refusal lives in the
+daemon's option parsing, which is the layer that can still ask the question.
+
+**Consequence:** burning a reward on purpose requires a lock version other than 0 whose program
+cannot be satisfied, which is improbability rather than proof. That asymmetry is deliberate: the
+easy path is the recoverable one.
+
+**Reversed if:** never. The cost of the check is one branch at startup.
+
+### 69. Blocks move between nodes as a framed flat file until there is a network
+
+**Implemented, 2026-09-05**, as `amariand --export-blocks` and `--import-blocks`.
+
+Phase 1's acceptance criterion is that two nodes independently validate the same chain, and Phase 4
+is where a node learns to talk to a peer. Something has to carry blocks between them in the
+meantime, and a file is the honest choice precisely because it is the *weaker* transport: it says
+nothing about who produced it, carries no work of its own, and offers no authority whatsoever. An
+importer that reaches the exporter's tip does so only because its own consensus code agrees with
+every block in the file. A network that authenticated its peers would prove less.
+
+The framing is `magic ‖ uint32 length ‖ block`, which is the shape Bitcoin's bootstrap files use,
+for its two reasons: the magic makes a file from the wrong network fail on its first record instead
+of deep inside a block, and the length lets a reader skip a record without parsing it.
+
+Genesis is not exported. It is a chain parameter every node rebuilds from `BuildGenesisBlock`, so a
+file has nothing to teach an importer about it, and shipping it would invite the idea that block 0
+is something a peer supplies.
+
+A wrong-network file stops the import at the first record rather than being attempted. The
+encodings are identical across networks, so a foreign file decodes as perfectly well-formed blocks
+and every one of them would be refused for a reason — an unknown predecessor — that says nothing
+about what actually went wrong.
+
+**Consequence:** a rejected block does not stop an import, so the operator is shown every problem
+in a file rather than the first, but it does make the run exit non-zero. A file this node partly
+refuses is not a file it agrees with.
+
+**Reversed if:** never removed — bootstrap files remain useful after P2P exists — but it stops
+being the *only* transport in Phase 4.
+
+### 70. The daemon does the work it was asked for and exits, rather than sitting in an event loop
+
+**Implemented, 2026-09-05**, as `Run` in `src/node/amariand.cpp`, which has no loop in it.
+
+There is nothing yet to service. The network layer is Phase 4; there are no peers to answer, no
+mempool to accept into, no RPC socket to read. A process that sat in a loop anyway would be idling
+while claiming to be a node, and the claim is the problem — it would make "the node is running"
+mean nothing, and it would be the sort of scaffolding that survives long past the point where it
+should have been replaced by the real thing.
+
+So a run opens the chainstate, brings the active chain up to the best block it holds, does whatever
+was asked — import, mine, export — makes the database durable, and stops. That is a complete thing
+to be, and it is precisely what makes the two-node acceptance test possible today: one process
+mines and exports, another imports and judges, and the two tips are compared after both have
+exited.
+
+**Consequence:** mining is `--generate n` and not a background thread. A miner that wants to keep
+going runs the command again, which is fine at regtest difficulty and is not a mining strategy for
+anything else. Phase 3's mining RPC is where continuous mining belongs, because it needs a
+long-poll and an extranonce protocol rather than a function call.
+
+**Reversed if:** Phase 4, when there is a socket to select on.
+
+### 71. Every clock read in the node happens in one file
+
+**Implemented, 2026-09-05**, as `UnixSeconds()` in `src/node/amariand.cpp`, the only clock call
+outside a test in the project.
+
+Consensus takes `now` as a parameter. So does `chain::HeaderContextFor`, so does
+`storage::LoadChain`, so does `BuildBlockTemplate`, so does `ChainState::AcceptBlock`. None of them
+can read a clock, which means a node's verdict on a block is reproducible from a transcript: given
+the same bytes and the same `now`, it decides the same thing, in a test, on another machine, a year
+later.
+
+The alternative — a rule that consults the system clock where it needs it — makes two nodes'
+disagreement about a block untraceable, because the input that caused it was never written down.
+
+**Consequence:** `now` is threaded through several signatures that would otherwise not need a
+parameter, and `LoadChain` has to be told a clock in order to replay headers it has already
+accepted (decision 55). That is the price and it is worth paying.
+
+**Reversed if:** never.
+
+### 72. One database with five column families, and one write batch per block
+
+**Implemented, 2026-09-05**, as `storage::ChainDb` in
+[src/storage/chain_db.cpp](../src/storage/chain_db.cpp): one RocksDB instance, with the column
+families `coins`, `blocks`, `undo`, `index` and `meta`. RocksDB's mandatory default family is
+opened because it must be and is left empty, so no record's home is implicit.
+
+The alternative was one database per kind of record, which is tidier to describe and unusable
+for the thing that actually matters. Applying a block changes five things at once: the coins it
+spends and creates, its body, its undo record, its index entry, and the tip. Those five are one
+fact. Split across five databases there is no way to make them one write, so a crash between the
+second and the third leaves a node whose tip names a block whose coins were never applied — and
+that state is not merely wrong, it is undetectable from inside, because every individual record
+is well-formed.
+
+One instance makes the batch possible, and the batch is written per block rather than per
+reorganisation for the reason in decision 60: every intermediate state is then the state of some
+valid chain, so an interrupted node is behind rather than corrupt.
+
+**Consequence:** the five families share a WAL and a flush schedule, so a large reorganisation is
+a sequence of batches rather than one, and the cost of the durability guarantee is paid per block.
+Measured cost is not yet interesting at regtest volumes and is a Phase 12 question.
+
+**Reversed if:** measurement shows the per-block batch dominating block application at real
+volumes. The fix would be batching a whole activation with an intermediate marker record, not
+splitting the database.
+
+### 73. The data directory carries its network's identity, and a mismatch is refused
+
+**Implemented, 2026-09-05**, as `CheckNetwork` in
+[src/storage/chain_db.cpp](../src/storage/chain_db.cpp): the `chain_id` stamp in the `meta`
+family, written on a database that has none, compared on one that has, and reported as
+`DbError::WrongNetwork` when it disagrees.
+
+Two networks' chains are both valid and completely unrelated. Opening a mainnet directory as
+regtest would offer real coins a chain whose blocks cost nothing to produce; opening a regtest
+directory as mainnet would announce a tip nobody else can reach. Neither is recoverable by
+reconciliation, because the two histories share no ancestor — so the only correct response is to
+refuse, and to refuse before anything is written.
+
+This is the second of two independent guards. The first is that `--datadir` defaults to
+`$HOME/.amarian/<network>`, one directory per network, so the mistake is hard to make by
+accident. The stamp is what catches it when the path was given explicitly, which is the case
+where the operator was most confident and most likely to be wrong.
+
+`CheckSchema` is the same mechanism for a different question — the layout version of the stored
+encodings, refused rather than upgraded in place, because reading one layout's bytes under
+another layout's rules is how a node quietly disagrees with itself about its own history. It
+reports `CorruptRecord` rather than a distinct error, which is honest for now: there is exactly
+one layout, so an unrecognised stamp is not a version this build could migrate from, it is a
+database this build cannot read.
+
+**Consequence:** a directory cannot be repurposed between networks by deleting a file. That is
+the intended cost.
+
+**Reversed if:** never for the network stamp. The schema stamp gains a real migration path, and
+an error to go with it, the first time a stored encoding changes.
+
+### 74. A storage fault is latched, and a run that latched one fails
+
+**Implemented, 2026-09-05**, as `ChainDb::HasFault()`, surfaced to the layer below as
+`ChainSink::HasFault` and read there by `ChainState::StorageFaulted()`, and checked at the end of
+`Run` in [src/node/amariand.cpp](../src/node/amariand.cpp).
+
+A read that fails is not an absent value. `GetCoin` returning "no coin" because RocksDB could not
+read the block containing it, and `GetCoin` returning "no coin" because the coin was spent, are
+the same answer to the caller and opposite facts about the chain. Consensus cannot tell them
+apart and should not have to: the interface it was written against is a lookup, and adding an
+error channel to it would put I/O handling in the layer that must not have any.
+
+So the failure is recorded where it happens and consulted where it can be acted on. It travels
+as a question the sink interface can answer, so `chain` can ask whether its own state is
+trustworthy without naming a database. A run that latched a fault fails even though every
+individual step of it returned, because the tip it would otherwise print may name a chain whose
+coins or bodies are not all present — and a node that prints a tip it cannot substantiate is
+worse than one that admits it stopped.
+
+**Consequence:** the exit status is the honest one, but the process may have already reported a
+tip in its log before the fault was surfaced. The log line is the node's belief at the time; the
+exit status is the verdict on the run. Anything reading a tip from a node's output must check the
+status too.
+
+**Reversed if:** the `CoinsView` interface gains an error channel — which would mean threading
+`std::expected` through every rule that looks up a coin, and is a much larger change than this
+one.
+
+### 75. Restoring a chain re-judges every stored header
+
+**Implemented, 2026-09-05**, as `storage::LoadChain`, which rebuilds the `BlockIndex` by
+offering each stored header to the same acceptance path a header off the network takes.
+
+A database file is untrusted input (see [THREAT_MODEL.md](THREAT_MODEL.md)). It may have been
+corrupted by a power failure or a failing disk, edited by someone with access to the machine, or
+written by an earlier version of this software with a bug. Rebuilding the index by trusting what
+is on disk would make every rule the node enforces conditional on nobody having touched a file
+— which is to say, not enforced.
+
+The cost is real: startup is linear in the height of the chain, and re-judging a header means
+recomputing its work and re-checking its linkage, timestamps and target. That is the price of
+the property that a tampered database is caught at startup rather than propagated.
+
+**Consequence:** `LoadChain` needs a clock (decision 71), because the header rules include a
+future-time bound. It is given `now` rather than reading one.
+
+**Reversed if:** startup time on a long chain becomes a real problem. The escape is a checkpoint
+of validated work, signed by nothing and trusted only as far as the operator's own disk — which
+weakens exactly the property above, and so needs measurement to justify.
+
+### 76. The serialised formats are frozen now that the acceptance criterion has passed
+
+**Decided, 2026-09-05.** [AMARIAN_PROTOCOL.md](AMARIAN_PROTOCOL.md) said the encodings were
+provisional until two nodes independently validated the same chain. They now do, so they are not
+provisional any more.
+
+The rule was written that way because a format is only worth freezing once something depends on
+it, and until there were two nodes nothing did. What changed is not confidence in the encodings
+but their status: from here, a change to a field's width or order is a hard fork, and is treated
+as one rather than as an edit — even though no public chain runs yet, so today's practical cost
+of breaking the freeze is regenerating the genesis blocks and discarding stored chains rather
+than splitting a live network.
+
+The point of holding the line while that cost is still low is that the layers being built next —
+the mempool, the wire protocol, the wallet — all encode assumptions about these bytes. A format
+that drifts under them produces bugs that look like protocol bugs and are not.
+
+**Consequence:** anything the formats got wrong is now paid for with a versioned extension rather
+than an edit. The two extension points that exist — a version field on every lock, with the
+reserved-and-invalid value the extension-point policy sets aside at each one (decision 45), and
+an explicit scheme identifier on every public key (decision 23) — were put there for exactly this
+reason. `MAX_BLOCK_WEIGHT` is explicitly marked provisional in the protocol document because it
+is a parameter and not a format.
+
+**Reversed if:** a defect is found in an encoding that cannot be worked around by a versioned
+extension. That is a hard fork, and it would be recorded here as one.
+
 ## Still open
 
 | Question | Decided in |

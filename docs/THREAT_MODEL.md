@@ -15,20 +15,22 @@ stop. This one is meant to be the input to
 that every class listed here has a regression test that fails if the defence is
 removed.
 
-**Updated 2026-09-05**, part way through Phase 1: twenty-five rows now read **yes**.
-The supply class is the one that changed most in this revision, and it changed because
-the unspent output set exists. The two rows that could not previously be closed — the
-coinbase fee bound and the phantom fee claim — are closed by `ConnectBlock`, which sums
-each transaction's fee from the coins it actually spent and hands the total to
-`CheckCoinbaseAmount`; coinbase maturity is enforced from the height stored on each coin;
-and two rows were *added*, for spending a coin that does not exist and for spending one
-coin twice, because until there was a set to consult neither attack had a defence to
-describe. The spend-authorisation class was the previous revision's change, and it remains
-the class where every row reads **yes** or **partial**.
+**Updated 2026-09-05**, at the close of Phase 1: thirty-two rows now read **yes**, thirteen
+read **partial**, and the count is a `grep` of the tables below rather than a recollection.
+What changed in this revision is the arrival of persistence, block assembly and a node that
+ties them together: the interrupted-reorganisation row now describes atomicity that reaches
+disk, and three rows were *added* — a block file from another network, a block file that is
+hostile rather than merely foreign, and mining to a lock nobody can spend — because until
+blocks could arrive from outside the process none of those had a surface to attack. The two
+revisions before this one closed the supply class on the unspent output set, and the
+spend-authorisation class remains the one where every row reads **yes** or **partial**.
 
-Nothing in the proof-of-work or network classes reads **yes**. The supply class is now
-complete apart from the `sequence == height` rule, which is implemented and exercised only
-indirectly. The context-free validation rules
+The network and wallet classes are still entirely **no**, because Phases 4 and 5 have not
+started and a defence that exists only in this document is not a defence. Proof of work and
+chain selection is now mixed: the arithmetic and selection rows are **yes**, the two rows that
+need an adversary who can withhold or interrupt are **partial**, and every retargeting row is
+**no** until Phase 3. The supply class is complete apart from the `sequence == height` rule,
+which is implemented and exercised only indirectly. The context-free validation rules
 ([src/consensus/validation.cpp](../src/consensus/validation.cpp)) are marked
 **implemented, untested** where they defend a row and nothing exercises them; that is
 a weaker claim than **yes** deliberately, because a rule nothing exercises is a rule
@@ -81,7 +83,7 @@ by a rule that was written on purpose.
 
 ## Where untrusted data enters
 
-Four boundaries, and it is worth being explicit that the *first* one is the one
+Five boundaries, and it is worth being explicit that the *first* one is the one
 people forget:
 
 1. **The P2P socket.** Blocks, transactions, headers, addresses, and every protocol
@@ -95,7 +97,14 @@ people forget:
    [fuzz/args_fuzz.cpp](../fuzz/args_fuzz.cpp) fuzzes it.
 4. **Anything read back from disk.** A database file is not a trusted input: it may
    have been corrupted by a power failure, a failing disk, or a previous version of
-   the software with a bug. Phase 1 onward.
+   the software with a bug. Live today: the chainstate is RocksDB, and `LoadChain`
+   re-judges every stored header by the rules it passed when it arrived rather than
+   trusting what it reads.
+5. **A block file.** `--import-blocks` reads blocks an operator was handed by someone
+   else. Until the P2P layer exists this is the only way a block reaches a node it was
+   not mined on, and it is treated exactly as a socket would be: every record's length
+   is bounded before it is read, every block is judged by the full rule set, and a
+   record whose magic is not this network's stops the import rather than being skipped.
 
 The rule that follows is that **deserialisation is the security perimeter**. Every
 parser is a place where an attacker chooses the bytes, so each one gets a fuzz
@@ -207,7 +216,9 @@ convention. A reviewer can miss an `#include`; a link error cannot be missed.
 | A valid block permanently refused by a node's own cache | Caching the rejection of a header that was only too far in the future, so the node refuses it and every descendant forever once the network accepts it | Rejected headers are not remembered at all, so a later offer is re-judged | 1 | **yes** — `BlockIndex.AHeaderWithAnUnknownPredecessorIsRefusedAndNotRemembered` asserts a refused header is not stored and that the same header is accepted once its predecessor arrives |
 | A ruled-out branch returning as a candidate | A rejected block's descendants still being weighed for the tip, or a later validity report erasing a recorded rejection | Failure is inherited to the whole subtree when it is recorded, and is a separate field from the validity ladder, which only ever rises | 1 | **yes** — `BlockIndex.MarkingABlockFailedRulesOutEverythingBelowIt`, `.AHeaderOnARejectedBranchIsRefusedWithoutBeingJudged`, `.RecordedValidityOnlyEverRises` |
 | Tip regression bought with a header | Announcing a heavier branch and never sending its bodies, so the node reverts to the fork point, connects nothing, and ends up on a shorter chain than it started with — a reorganisation for the price of 92 bytes | Before a switch begins the target is truncated to the highest block whose whole path from the fork point is stored, and the switch is abandoned unless that truncated target still wins under `IsBetterTip`. Every block contributes at least one unit of work, so an ancestor's total work is strictly below its descendant's and a truncated target can never beat the tip it would replace | 3, 4 | partial — the guard is implemented in `ChainState::ActivateBestChain` and its argument is arithmetic rather than empirical, which is why it is stated as a bound in [AMARIAN_PROTOCOL.md](AMARIAN_PROTOCOL.md#carrying-the-plan-out) and decision 59. No test exercises a withholding peer, because nothing can withhold yet: the P2P layer is Phase 4, and that is where the adversarial test belongs |
-| A corrupt coins set from an interrupted reorganisation | Killing a node part way through a deep switch so the unspent output set describes neither the old chain nor the new one | Application and reversal are atomic per *block*, not per switch, so every intermediate state is the set for some valid chain; an interrupted node is on a shorter chain and the next activation walks it back up | 1, 3 | partial — `ConnectBlock` and `DisconnectBlock` stage into an inner cache and flush only on success, covered by `ConnectBlock.*` and `DisconnectBlock.*` including the failure paths that must leave the set untouched. What is untested is an actual interruption, which needs the persistence layer to be meaningful — an in-memory set does not survive the process either way |
+| A corrupt coins set from an interrupted reorganisation | Killing a node part way through a deep switch so the unspent output set describes neither the old chain nor the new one | Application and reversal are atomic per *block*, not per switch, so every intermediate state is the set for some valid chain; an interrupted node is on a shorter chain and the next activation walks it back up. Atomicity now extends to disk: one RocksDB write batch per block covers the coins, the body, the undo record, the index entry and the tip together, so the durable state is also the set for some valid chain and never a tip naming coins that were never applied | 1, 3 | partial — `ConnectBlock` and `DisconnectBlock` stage into an inner cache and flush only on success, covered by `ConnectBlock.*` and `DisconnectBlock.*` including the failure paths that must leave the set untouched, and the resume path is exercised by [phase1_acceptance.sh](../scripts/phase1_acceptance.sh), where both nodes restart and restore the same tip. What is still untested is an actual kill mid-switch: that needs a node to be killed at a chosen point, which belongs with the Phase 9 adversarial work rather than with a unit test |
+| A block file that is not this network's | Handing an operator a file of well-formed blocks from another chain, so the node either accepts a foreign history or refuses five hundred blocks for reasons that say nothing about the real fault | Each record carries the network magic, checked before the block is decoded, and a mismatch stops the import at that record. Independently, a data directory carries its network's `chain_id` and opening it as another network is refused rather than reconciled — two guards, either of which is sufficient | 1 | **yes** — [phase1_acceptance.sh](../scripts/phase1_acceptance.sh) runs a testnet node against a regtest file and against a regtest data directory, and asserts both refusals and the message each gives |
+| A block file that is hostile rather than merely foreign | A record claiming a length larger than any block can be, to make a node allocate; or a truncated record; or bytes that are not a block at all | Length is checked against `max_block_weight` before a byte of the body is read, a short read is an error rather than a partial block, and the block itself goes through the same decoder every other input does — the one with the widest fuzz harness in the project | 1 | partial — the bounds are implemented and `fuzz_serialize` covers the decoder they hand off to, but no harness drives the framing itself. That is where a `fuzz_blockfile` target belongs, and Phase 9 is where the file gets one |
 | Difficulty oscillation on a young chain | Hashrate arriving and leaving faster than the retarget adapts | ASERT's exponential response, parameterised with simulation evidence. Acknowledged as the most fragile part of a new chain | 3 | no |
 
 The distinction in that table between "selfish mining" and "reorganisation without
@@ -266,6 +277,7 @@ what any node accepts.
 | Change address confusion | Sending change somewhere unrecoverable | Change always to a key derivable from the same seed | 5 | no |
 | Fee overpayment or stuck transaction | Bad estimation | Fee estimation with an explicit override, and a visible fee before confirmation | 5 | no |
 | Amount or recipient display mismatch | The signed transaction differs from what was shown | The confirmation step renders the transaction that will be signed, from the same structure | 5, 11 | no |
+| Mining a reward nobody can spend | A payout lock that is provably unspendable — version `0` — or a mistyped one, quietly burning every block's reward while the node reports success | `--payout` is parsed as a `Lock` and refused if it does not decode or if `IsUnspendable()`. What cannot be checked is whether the operator holds the key behind a *well-formed* lock, and no rule can check that; the wallet in Phase 5 is what removes the need to hand a node a raw lock at all | 1, 5 | partial — the refusals are implemented in `amariand`'s `ParsePayout`, which exits with a usage error rather than mining, but no test asserts either one. The well-formed-but-unowned case is out of reach by construction |
 
 ### 8. Build and supply chain
 
@@ -379,16 +391,15 @@ false is a security report, and a valuable one.
 | Supply integrity | yes | the per-amount bound, the coinbase, height and output-sum rules, the per-transaction fee rule, and now the block-level rules — coinbase ≤ reward + fees actually paid, coinbase maturity, input existence and the duplicate-outpoint invariant | nine rows: the amount bound, both summing sides, outputs-exceed-inputs, the coinbase bound, phantom fees, maturity, missing inputs and double spends |
 | Spend authorisation | yes | structure, identity, and verification — the lock commitment, the threshold walk and `crypto::Verify` | ten rows, on identity, the sighash commitments, the commitment check and the threshold |
 | Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers, canonical encoding, and atomic-plus-exact state transitions | encoding rows, plus the reversal and atomicity rows |
-| Proof of work and chain selection | yes | the target codec and the per-header work check; no chain selection | one row on the Merkle construction, plus the target codec |
+| Proof of work and chain selection | yes | the target codec, the per-header work check, accumulated work as an exact 256-bit integer, the most-work selection rule with inherited rejection, activation over the coins set, and the body-availability guard on a switch; no retargeting | the work arithmetic including agreement with an externally derived constant, the selection and ruled-out-branch rows, the Merkle construction and the target codec |
 | Resource exhaustion | yes | the deserialisation rows, the weight limit, the linear sighash and the bounded threshold walk | four rows, one of them fuzzed |
 | Network layer | outline only | no | no |
 | Wallet | outline only | no | no |
 | Build and supply chain | yes | mostly | one, informal |
 | Cryptographic agility | yes | explicit scheme identifiers, a registry over two backends, and a startup gate on availability | the registry's self-consistency and both extension points' soft-fork behaviour |
 
-Every class still has more "no" in it than "yes", which is what Phase 1 of 13 looks
-like part way through. A document claiming otherwise would be the more serious
-defect.
+Five of the nine classes still have more "no" in them than "yes", which is what the close of
+Phase 1 of 13 looks like. A document claiming otherwise would be the more serious defect.
 
 What exists today that belongs in this table at all: the layering contract enforced
 by the linker; checked arithmetic with `-fwrapv` behind it; hardening flags that
@@ -402,17 +413,27 @@ rules; the signature scheme registry over libsecp256k1 and OpenSSL with the star
 gate that refuses to run a build missing one; the fixed-size signature hash;
 spend authorisation itself — the lock commitment, the ordered threshold walk against
 real signatures, and the rule that a transaction cannot pay out more than it spends;
-and the unspent output set, with atomic connect and disconnect, an undo record that is
-compared for full equality on reversal, and the block-level supply bound that needed it.
+the unspent output set, with atomic connect and disconnect, an undo record that is
+compared for full equality on reversal, and the block-level supply bound that needed it;
+the header tree with exact accumulated work, the most-work selection rule and inherited
+rejection; activation, which keeps the coins set in step with the tip one atomic block at a
+time; and the chainstate on disk, one write batch per block across all five column families,
+re-judging every stored header when it is loaded back.
 
-What does not exist: any rule that decides *which* state to be in. A block can now be
-applied to a set and taken back off again, and every rule that consults a coin is
-enforced — input existence, maturity, the fee total, the duplicate-outpoint invariant.
-What is missing is the chain: nothing yet decides which block to apply, so
-`ConnectBlock` is handed a block and a height by a caller. No block index exists, no
-accumulated-work comparison, no persistence — so a node cannot yet disagree with a peer
-about a tip, because it does not have one. Everything in the network and wallet classes
-is therefore still a plan, and the rows say so.
+The consequence worth stating plainly: **a node now has a tip, so it can now disagree with a
+peer about one.** That is not a step towards the threat model, it is the point at which most of
+it becomes reachable — every row about chain selection, reorganisation and convergence
+describes something that can actually happen to this software now rather than something the
+design would do if it existed.
+
+What does not exist: an adversary that can reach a node without an operator's help. There is no
+socket, so nothing in the network class has been exercised by anything; blocks arrive as a file
+an operator chose to import, which is why the rows about withholding bodies and interrupting a
+switch remain **partial** — the defences are implemented and argued, and nothing has yet
+attacked them. There is no mempool, so every row about relay policy, fee pressure and transaction
+flooding is about code that has not been written. There is no wallet, so the whole of class 7 is
+a plan. And difficulty retargeting is a constant target today, which is a complete rule for
+regtest and not one for a network with hashrate on it.
 
 [Phase 9](ROADMAP.md#phase-9--security-engineering) is where every row above
 acquires a test that fails when the defence is removed — a stronger property than
