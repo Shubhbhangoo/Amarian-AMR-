@@ -149,9 +149,14 @@ constexpr int64_t PAID_AMOUNT = 400'000;
         Params().chain_id, tx, ComputeSigHashMidstates(tx), 0, spent_amount, condition);
 }
 
-[[nodiscard]] std::array<TxOutput, 1> SpentOutputs(const SpendCondition& condition,
-                                                   int64_t amount = SPENT_AMOUNT) {
-    return {TxOutput{.amount = amount, .lock = LockFor(condition)}};
+/// The coins the fixture transactions spend. A single mature, non-coinbase coin, which is
+/// the case every authorisation test below is about; the maturity rule has its own tests
+/// that build a coinbase coin explicitly.
+[[nodiscard]] std::array<Coin, 1> SpentOutputs(const SpendCondition& condition,
+                                              int64_t amount = SPENT_AMOUNT) {
+    return {Coin{.output = TxOutput{.amount = amount, .lock = LockFor(condition)},
+                 .height = 1,
+                 .is_coinbase = false}};
 }
 
 /// Asserts that a transaction is structurally sound before asking whether it is
@@ -207,7 +212,7 @@ TEST(Validation, ALockProgramOfTheWrongLengthMatchesNothing) {
     tx.witnesses[0].signatures = {FirstKey().Sign(MessageFor(tx, condition))};
 
     auto spent = SpentOutputs(condition);
-    spent[0].lock.program.pop_back();
+    spent[0].output.lock.program.pop_back();
     const Verdict verdict = CheckSpendAuthorisation(tx, spent, Params());
     ASSERT_FALSE(verdict.has_value());
     EXPECT_EQ(verdict.error(), ValidationError::TxConditionDoesNotMatchLock);
@@ -219,7 +224,7 @@ TEST(Validation, LockVersionZeroCannotBeSpentByAnything) {
     tx.witnesses[0].signatures = {FirstKey().Sign(MessageFor(tx, condition))};
 
     auto spent = SpentOutputs(condition);
-    spent[0].lock.version = LOCK_VERSION_UNSPENDABLE;
+    spent[0].output.lock.version = LOCK_VERSION_UNSPENDABLE;
     const Verdict verdict = CheckSpendAuthorisation(tx, spent, Params());
     ASSERT_FALSE(verdict.has_value());
     EXPECT_EQ(verdict.error(), ValidationError::TxSpendsUnspendableOutput);
@@ -237,7 +242,7 @@ TEST(Validation, AnUnknownLockVersionStaysSpendableWithoutASignatureCheck) {
     tx.witnesses[0].signatures[0].bytes[0] ^= 0xFF;
 
     auto spent = SpentOutputs(condition);
-    spent[0].lock.version = 200;
+    spent[0].output.lock.version = 200;
     EXPECT_TRUE(CheckSpendAuthorisation(tx, spent, Params()).has_value());
 }
 
@@ -317,7 +322,7 @@ TEST(Validation, TheSpentOutputCountMustMatchTheInputCount) {
     Transaction tx = MakeSpend(condition);
     tx.witnesses[0].signatures = {FirstKey().Sign(MessageFor(tx, condition))};
 
-    const Verdict verdict = CheckSpendAuthorisation(tx, std::span<const TxOutput>{}, Params());
+    const Verdict verdict = CheckSpendAuthorisation(tx, std::span<const Coin>{}, Params());
     ASSERT_FALSE(verdict.has_value());
     EXPECT_EQ(verdict.error(), ValidationError::TxSpentOutputCountMismatch);
 }
@@ -331,11 +336,11 @@ TEST(Validation, ACoinbaseHasNothingToAuthoriseAndNoFee) {
     ASSERT_TRUE(coinbase.IsCoinbase());
 
     const Verdict authorised =
-        CheckSpendAuthorisation(coinbase, std::span<const TxOutput>{}, Params());
+        CheckSpendAuthorisation(coinbase, std::span<const Coin>{}, Params());
     ASSERT_FALSE(authorised.has_value());
     EXPECT_EQ(authorised.error(), ValidationError::TxCoinbaseAuthorisesNothing);
 
-    const Computed<int64_t> fee = TransactionFee(coinbase, std::span<const TxOutput>{});
+    const Computed<int64_t> fee = TransactionFee(coinbase, std::span<const Coin>{});
     ASSERT_FALSE(fee.has_value());
     EXPECT_EQ(fee.error(), ValidationError::TxCoinbaseAuthorisesNothing);
 }

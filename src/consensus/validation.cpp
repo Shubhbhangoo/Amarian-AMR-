@@ -29,32 +29,6 @@ namespace {
 static_assert(amarian::SCHEME_RESERVED == crypto::SCHEME_RESERVED,
               "the reserved signature scheme id must be the same value in both layers");
 
-/// Odd 64-bit multiplier — the golden ratio's reciprocal scaled to 2^64 — so that the
-/// outpoint index below influences every bit of the mix rather than only the low ones.
-constexpr size_t OUTPOINT_INDEX_MULTIPLIER = 0x9E37'79B9'7F4A'7C15ULL;
-
-/// Hashes an outpoint for the duplicate-spend sets below.
-///
-/// A txid is already a uniformly distributed 256-bit value, so eight of its bytes
-/// mixed with the index is as good a hash as anything derived from it — and, unlike a
-/// generic combiner, it cannot be made to collide by an attacker choosing txids,
-/// because choosing a txid means finding a preimage.
-struct OutPointHash {
-    [[nodiscard]] size_t operator()(const OutPoint& outpoint) const noexcept {
-        static_assert(sizeof(size_t) >= sizeof(uint64_t),
-                      "the mixing below assumes a 64-bit hash word");
-        const std::array<uint8_t, Hash256::SIZE>& bytes = outpoint.txid.Array();
-        size_t mixed = 0;
-        for (size_t index = 0; index < sizeof(uint64_t); ++index) {
-            mixed |= size_t{bytes[index]} << (index * 8);
-        }
-        mixed ^= size_t{outpoint.index} * OUTPOINT_INDEX_MULTIPLIER;
-        return mixed;
-    }
-};
-
-using OutPointSet = std::unordered_set<OutPoint, OutPointHash>;
-
 /// Whether a key's length disagrees with what its scheme's registry entry claims.
 ///
 /// A scheme this build has never heard of has no length to disagree with, so it is not
@@ -155,7 +129,7 @@ std::string_view Describe(ValidationError error) noexcept {
         case ValidationError::TxCoinbaseAuthorisesNothing:
             return "coinbase has no inputs to authorise and pays no fee";
         case ValidationError::TxSpentOutputCountMismatch:
-            return "not exactly one spent output was supplied per input";
+            return "not exactly one spent coin was supplied per input";
         case ValidationError::TxSpendsUnspendableOutput:
             return "input spends an output locked with unspendable lock version 0";
         case ValidationError::TxConditionDoesNotMatchLock:
@@ -166,6 +140,13 @@ std::string_view Describe(ValidationError error) noexcept {
             return "spent amounts sum outside [0, MAX_MONEY]";
         case ValidationError::TxOutputsExceedInputs:
             return "transaction pays out more than it spends";
+
+        case ValidationError::TxInputMissingOrSpent:
+            return "input spends an outpoint that is not in the UTXO set";
+        case ValidationError::TxCoinbaseNotMature:
+            return "coinbase output spent before it matured";
+        case ValidationError::TxCreatesExistingOutpoint:
+            return "output would overwrite an outpoint that is already unspent";
 
         case ValidationError::BlockNoTransactions:
             return "block has no transactions";
@@ -185,6 +166,8 @@ std::string_view Describe(ValidationError error) noexcept {
             return "two transactions in the block spend the same outpoint";
         case ValidationError::BlockCoinbasePaysTooMuch:
             return "coinbase claims more than the scheduled reward plus fees";
+        case ValidationError::BlockFeesOutOfRange:
+            return "the block's fees sum outside [0, MAX_MONEY]";
     }
     // Unreachable for any enumerator: the switch above is total, and -Wswitch-enum
     // makes a newly added one a build failure rather than a silent fall-through.
@@ -349,7 +332,7 @@ Verdict CheckTransaction(const Transaction& tx, const ChainParams& params) {
         // the UTXO set: spending the same output twice in one transaction would
         // otherwise be caught or missed depending on the order the inputs are applied
         // in, which is not a property consensus may have.
-        OutPointSet seen;
+        std::unordered_set<OutPoint> seen;
         seen.reserve(tx.inputs.size());
         for (const TxInput& input : tx.inputs) {
             if (!seen.insert(input.outpoint).second) {
@@ -435,11 +418,11 @@ namespace {
 
 }  // namespace
 
-Computed<int64_t> TransactionFee(const Transaction& tx, std::span<const TxOutput> spent_outputs) {
+Computed<int64_t> TransactionFee(const Transaction& tx, std::span<const Coin> spent_coins) {
     if (tx.IsCoinbase()) {
         return std::unexpected(ValidationError::TxCoinbaseAuthorisesNothing);
     }
-    if (spent_outputs.size() != tx.inputs.size()) {
+    if (spent_coins.size() != tx.inputs.size()) {
         return std::unexpected(ValidationError::TxSpentOutputCountMismatch);
     }
 
@@ -448,8 +431,8 @@ Computed<int64_t> TransactionFee(const Transaction& tx, std::span<const TxOutput
     // comparison below meaningful, and `TryAccumulate` reports the overflow instead of
     // wrapping into a value that would look like a smaller amount.
     int64_t spent = 0;
-    for (const TxOutput& output : spent_outputs) {
-        if (!IsValidAmount(output.amount) || !TryAccumulate(spent, output.amount) ||
+    for (const Coin& coin : spent_coins) {
+        if (!IsValidAmount(coin.output.amount) || !TryAccumulate(spent, coin.output.amount) ||
             !IsValidAmount(spent)) {
             return std::unexpected(ValidationError::TxInputSumOutOfRange);
         }
@@ -474,12 +457,12 @@ Computed<int64_t> TransactionFee(const Transaction& tx, std::span<const TxOutput
 }
 
 Verdict CheckSpendAuthorisation(const Transaction& tx,
-                                std::span<const TxOutput> spent_outputs,
+                                std::span<const Coin> spent_coins,
                                 const ChainParams& params) {
     if (tx.IsCoinbase()) {
         return Reject(ValidationError::TxCoinbaseAuthorisesNothing);
     }
-    if (spent_outputs.size() != tx.inputs.size()) {
+    if (spent_coins.size() != tx.inputs.size()) {
         return Reject(ValidationError::TxSpentOutputCountMismatch);
     }
     // `CheckTransaction` already guarantees this. It is re-checked because that guarantee
@@ -496,7 +479,7 @@ Verdict CheckSpendAuthorisation(const Transaction& tx,
     const SigHashMidstates midstates = ComputeSigHashMidstates(tx);
 
     for (size_t index = 0; index < tx.inputs.size(); ++index) {
-        const TxOutput& spent = spent_outputs[index];
+        const TxOutput& spent = spent_coins[index].output;
         const Witness& witness = tx.witnesses[index];
 
         if (spent.lock.IsUnspendable()) {
@@ -538,6 +521,47 @@ Verdict CheckSpendAuthorisation(const Transaction& tx,
         }
     }
     return Accept();
+}
+
+Computed<int64_t> CheckTransactionInputs(const Transaction& tx,
+                                        std::span<const Coin> spent_coins,
+                                        uint32_t spend_height,
+                                        const ChainParams& params) {
+    if (tx.IsCoinbase()) {
+        return std::unexpected(ValidationError::TxCoinbaseAuthorisesNothing);
+    }
+    if (spent_coins.size() != tx.inputs.size()) {
+        return std::unexpected(ValidationError::TxSpentOutputCountMismatch);
+    }
+
+    // Maturity first, because it is two integer comparisons per input and no adversary can
+    // make them expensive. Widened to int64_t on both sides so that a coin claiming a
+    // height above the spending block's — which a corrupted database could produce —
+    // yields a negative age and is rejected, rather than wrapping through zero into
+    // something that looks old enough.
+    for (const Coin& coin : spent_coins) {
+        if (!coin.is_coinbase) {
+            continue;
+        }
+        const int64_t age = int64_t{spend_height} - int64_t{coin.height};
+        if (age < int64_t{params.coinbase_maturity}) {
+            return std::unexpected(ValidationError::TxCoinbaseNotMature);
+        }
+    }
+
+    // The fee before the cryptography. This is the rule that rejects a transaction trying
+    // to mint coins, and it is integer addition — so a forgery that also tries to mint
+    // costs this node no elliptic-curve or lattice work at all.
+    const Computed<int64_t> fee = TransactionFee(tx, spent_coins);
+    if (!fee.has_value()) {
+        return fee;
+    }
+
+    if (const Verdict authorised = CheckSpendAuthorisation(tx, spent_coins, params);
+        !authorised) {
+        return std::unexpected(authorised.error());
+    }
+    return fee;
 }
 
 // --- Headers ---------------------------------------------------------------------
@@ -682,7 +706,7 @@ Verdict CheckBlock(const Block& block, const ChainParams& params) {
     // One outpoint may be spent once in the whole block, not once per transaction.
     // Without this, two transactions in one block could each spend the same output and
     // both would pass in isolation.
-    OutPointSet spent;
+    std::unordered_set<OutPoint> spent;
     for (const Transaction& tx : block.transactions) {
         if (tx.IsCoinbase()) {
             continue;
@@ -703,7 +727,7 @@ Verdict CheckCoinbaseAmount(const Block& block, int64_t total_fees, const ChainP
     // A fee total outside the money range is a caller that has already lost track of
     // the arithmetic, and this rule will not launder it into a permitted reward.
     if (!IsValidAmount(total_fees)) {
-        return Reject(ValidationError::TxAmountOutOfRange);
+        return Reject(ValidationError::BlockFeesOutOfRange);
     }
 
     int64_t claimed = 0;

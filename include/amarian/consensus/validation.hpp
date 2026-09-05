@@ -24,11 +24,17 @@
 ///
 /// ## What is not here yet
 ///
-/// Two contextual transaction rules still need state this component cannot see: that an
-/// input's outpoint exists and is unspent, and that a coinbase output has matured. Both
-/// are lookups into the UTXO set, which is the next component; `CheckSpendAuthorisation`
-/// below takes the outputs being spent as a parameter precisely so that the cryptography
-/// does not have to wait for the database.
+/// Every transaction rule is now here, including the two that need the UTXO set: an
+/// input's outpoint must exist and be unspent, and a coinbase output must have matured.
+/// The first is a *lookup* and so cannot be a function of values — its failure is the
+/// absence of a coin — and the `utxo` layer reports it with `TxInputMissingOrSpent` from
+/// this enumeration, so that the vocabulary of rules stays in one place even though the
+/// lookup does not. The second is `CheckTransactionInputs` below, which is a pure
+/// function of the coins it is handed.
+///
+/// What is genuinely absent is anything that needs a *chain*: which of two valid branches
+/// has more work, and therefore which UTXO set is the real one. That is the block index's
+/// question, not a rule's.
 ///
 /// That is why `CheckBlock` is explicit that it is the context-free half: a block that
 /// passes it is not yet valid, and no caller should be able to read the name and think
@@ -36,6 +42,7 @@
 
 #include <amarian/consensus/params.hpp>
 #include <amarian/primitives/block.hpp>
+#include <amarian/primitives/coin.hpp>
 #include <amarian/primitives/spend_condition.hpp>
 #include <amarian/primitives/transaction.hpp>
 #include <amarian/primitives/witness.hpp>
@@ -96,12 +103,22 @@ enum class ValidationError : uint16_t {
     TxCoinbaseAuthorisesNothing,  ///< A coinbase spends nothing, so it has no fee and no
                                   ///< input to authorise. Its reward is bounded instead
                                   ///< by `CheckCoinbaseAmount`.
-    TxSpentOutputCountMismatch,   ///< Not exactly one spent output per input.
+    TxSpentOutputCountMismatch,   ///< Not exactly one spent coin per input.
     TxSpendsUnspendableOutput,    ///< Lock version 0, which no witness can satisfy.
     TxConditionDoesNotMatchLock,  ///< The revealed condition is not the one committed to.
     TxSignatureDoesNotVerify,     ///< No remaining key in the condition verifies it.
     TxInputSumOutOfRange,         ///< The spent amounts sum outside `[0, MAX_MONEY]`.
     TxOutputsExceedInputs,        ///< Spends more than it takes in, which would mint coins.
+
+    // --- The UTXO set: what exists, and what has aged ------------------------------
+    TxInputMissingOrSpent,      ///< The outpoint is not in the UTXO set. Reported by the
+                                ///< `utxo` layer, because absence is a failed lookup
+                                ///< rather than a property of any value.
+    TxCoinbaseNotMature,        ///< A coinbase output spent fewer than
+                                ///< `coinbase_maturity` blocks after it was created.
+    TxCreatesExistingOutpoint,  ///< An output whose outpoint is already unspent. It
+                                ///< would overwrite a live coin, which is coin
+                                ///< destruction rather than creation.
 
     // --- Block ---------------------------------------------------------------------
     BlockNoTransactions,
@@ -113,6 +130,7 @@ enum class ValidationError : uint16_t {
     BlockCoinbaseWrongHeight,  ///< The coinbase input's `sequence` is not the header's height.
     BlockDuplicateSpend,       ///< Two transactions in the block spend one outpoint.
     BlockCoinbasePaysTooMuch,  ///< Above the scheduled reward plus the fees actually paid.
+    BlockFeesOutOfRange,       ///< The block's fees sum outside `[0, MAX_MONEY]`.
 };
 
 /// A rule verdict: success, or the one rule that rejected the input.
@@ -178,11 +196,16 @@ using Verdict = std::expected<void, ValidationError>;
 
 // --- Spend authorisation ---------------------------------------------------------
 //
-// The rules that need the outputs being spent, and nothing else. They are separated from
-// the ones that need the whole UTXO set on purpose: *finding* `spent_outputs` is lookup,
+// The rules that need the coins being spent, and nothing else. They are separated from
+// the lookup that *finds* those coins on purpose: locating them is a database question,
 // and deciding whether they may be spent is arithmetic and cryptography. Splitting them
 // means the expensive half is a pure function of values, which is what lets it be tested
 // exhaustively without a database and, later, run on several threads without a lock.
+//
+// The boundary is `std::span<const Coin>` — values the caller already holds, not a handle
+// it could query. A `Coin` rather than a bare `TxOutput` because two of these rules need
+// facts about a coin's *creation* that the output itself does not carry: the height it was
+// created at and whether it came from a coinbase.
 
 /// A value, or the one rule that rejected the input. The `Verdict` of a rule that has
 /// something to say when it succeeds.
@@ -200,14 +223,14 @@ using Computed = std::expected<T, ValidationError>;
 /// A coinbase spends nothing and pays no fee, so it is rejected here rather than given a
 /// special case: callers sum this over the non-coinbase transactions of a block.
 [[nodiscard]] Computed<int64_t> TransactionFee(const Transaction& tx,
-                                               std::span<const TxOutput> spent_outputs);
+                                               std::span<const Coin> spent_coins);
 
-/// Whether each input is actually authorised to spend the output it names: the revealed
-/// condition is the one that output committed to, and the signatures satisfy it.
+/// Whether each input is actually authorised to spend the coin it names: the revealed
+/// condition is the one that coin's lock committed to, and the signatures satisfy it.
 ///
-/// `spent_outputs[i]` is the output that `tx.inputs[i]` spends; the count is checked
+/// `spent_coins[i]` is the coin that `tx.inputs[i]` spends; the count is checked
 /// rather than assumed, because a caller that got it wrong would otherwise read past the
-/// end of the span. Whether each of those outputs *exists* and is unspent is the UTXO
+/// end of the span. Whether each of those coins *exists* and is unspent is the UTXO
 /// set's answer and is not asked here.
 ///
 /// Assumes `CheckTransaction` has passed, so the witness count matches the input count
@@ -247,8 +270,39 @@ using Computed = std::expected<T, ValidationError>;
 /// that could never have verified anything anyway. Skipping leaves it spendable by the
 /// keys that do work, which is what its owner asked for.
 [[nodiscard]] Verdict CheckSpendAuthorisation(const Transaction& tx,
-                                              std::span<const TxOutput> spent_outputs,
+                                              std::span<const Coin> spent_coins,
                                               const ChainParams& params);
+
+/// Everything a non-coinbase transaction must satisfy against the coins it spends, and
+/// the fee it pays if it does. The whole of the UTXO-dependent rule set except the lookup
+/// itself.
+///
+/// `spend_height` is the height of the block this transaction is being validated *into* —
+/// not the height of any coin it spends. For a transaction under consideration for the
+/// mempool it is the height the next block would have, because that is the earliest block
+/// it could appear in.
+///
+/// The order the rules run in is deliberate, and it is cheapest-first:
+///
+///  1. A coinbase is rejected. It spends nothing, so none of the rest applies.
+///  2. The span length must equal the input count, so nothing below can read past its end.
+///  3. **Maturity**: a coin from a coinbase must be at least `params.coinbase_maturity`
+///     blocks old. Two integer comparisons per input, and no adversary can make them
+///     expensive.
+///  4. **The fee**: integer addition, and it is what rejects a transaction that tries to
+///     mint. Running it before the signature checks means a would-be minter's forgery
+///     costs this node no elliptic-curve work at all.
+///  5. **Authorisation**: the cryptography, last, once everything an attacker can make
+///     cheap to reject has already rejected it.
+///
+/// Maturity uses `int64_t` arithmetic on both heights so that a coin claiming a height
+/// above the spending block's cannot wrap around into looking mature. Semantics match
+/// Bitcoin's: a coinbase output created in block *H* is first spendable in block
+/// *H + coinbase_maturity*.
+[[nodiscard]] Computed<int64_t> CheckTransactionInputs(const Transaction& tx,
+                                                      std::span<const Coin> spent_coins,
+                                                      uint32_t spend_height,
+                                                      const ChainParams& params);
 
 // --- Headers ---------------------------------------------------------------------
 
