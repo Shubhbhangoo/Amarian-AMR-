@@ -68,7 +68,14 @@ SeparateDefinitionBlocks: Always
 SortIncludes: CaseSensitive
 SortUsingDeclarations: true
 
-IncludeBlocks: Regroup
+# Preserve, not Regroup. Every source in this tree separates the header it implements
+# from the headers it merely uses with a blank line, which is how a reader tells "this
+# file's own interface" from "its dependencies" at a glance. Regroup merges the two
+# because clang-format's main-include heuristic does not recognise an angle-bracketed
+# own header, so it would delete that distinction from every file in the project and
+# report the whole tree as misformatted. The categories below still order includes
+# within each block, so grouping stays intentional and ordering stays mechanical.
+IncludeBlocks: Preserve
 IncludeCategories:
   # Own headers first so a header is self-contained or the build breaks.
   - Regex: '^<amarian/'
