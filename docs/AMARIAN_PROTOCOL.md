@@ -110,6 +110,14 @@ through a registry in the `crypto` layer to a key length, a signature length, an
 verification function; a scheme the node does not know is not a parse error, it is a
 key it cannot verify, which is a different and important distinction.
 
+The direction of the inference is reversed, though, and that *is* a consensus rule: a key
+whose scheme this node knows must be exactly the length that scheme's registry entry
+gives, and so must a signature. Both are checked in the context-free pass, so a key that
+could never have parsed is rejected before any cryptographic library is entered. A key
+under an unknown scheme has no length this node can check against and is left alone — the
+signature rule is additionally scoped to `condition_version` 1, since a later version is
+free to define a different relationship between its signatures and the registry.
+
 Provisional registry — identifiers are **not final** until Phase 1 fixes them:
 
 | Id | Scheme | Key (bytes) | Signature (bytes) | Status |
@@ -143,8 +151,9 @@ historically live. If a future requirement genuinely needs more expressiveness, 
 having been available and unreviewed from the first block.
 
 Constraints, all checked: `threshold` in `1..=len(keys)`; `keys` non-empty, at most
-16, sorted, and distinct. Sorted and distinct together make the encoding canonical
-and make a threshold impossible to satisfy by counting one key twice.
+16, sorted, and distinct. Sorted and distinct together make the encoding canonical, and
+the [ordered forward match](#validation-order) that consumes them makes a threshold
+impossible to satisfy by offering one key's signature twice.
 
 ## Locks
 
@@ -452,7 +461,9 @@ canonically encoded → at least one input and one output → counts within limi
 coinbase/non-coinbase structural rules, including that no non-coinbase input names the
 sentinel outpoint → every amount in `[0, MAX_MONEY]` and their sum likewise → no
 duplicate outpoint within the transaction → each witness structurally satisfies its
-revealed condition → weight within limits. None of this needs the UTXO set.
+revealed condition, which includes every key and signature being exactly the length its
+scheme defines where the scheme is one this build knows → weight within limits. None of
+this needs the UTXO set.
 
 Amounts come before the duplicate-outpoint scan because they are arithmetic over values
 already in hand, while the scan builds a hash set sized by the input count; weight is
@@ -463,6 +474,41 @@ maturity satisfied → the revealed `SpendCondition` hashes to the lock's commit
 sum of inputs ≥ sum of outputs → *then* signature verification. Signature
 verification is last because it is the only step whose cost an attacker can raise
 substantially, and by that point everything cheap has already had a chance to reject.
+
+The last three of those are `CheckSpendAuthorisation` and `TransactionFee`, which take the
+outputs being spent as an explicit list rather than a database handle: finding those
+outputs is a lookup, and deciding whether they may be spent is arithmetic and
+cryptography, so the expensive half stays a pure function of values.
+
+**How a threshold is satisfied.** A witness's signatures are matched against its
+condition's keys by **ordered forward match**: a single key index advances monotonically
+across the whole signature list, so signature *i* is tried only against keys left over
+after signature *i−1* stopped. Two consensus properties follow, and both are the reason
+for specifying it rather than trying every pair:
+
+- **Cost.** At most `keys.size()` verifications happen for an input no matter how many
+  signatures are offered, so the work an input can demand is bounded by the key count its
+  own commitment fixed — and a threshold condition is capped at 16 keys. Trying every pair
+  would be quadratic in a number the spender chooses.
+- **No malleability.** Exactly one ordering of a given signature set verifies: the
+  ascending one. Any permutation of a valid witness is invalid, so a relayer cannot
+  reorder signatures to produce a second `wtxid` for one transaction.
+
+Each key therefore counts at most once, which is what makes a 2-of-2 need two distinct
+keys rather than one signature offered twice.
+
+A key that is the right length for its scheme but that the implementation cannot parse is
+skipped, exactly like one whose signature failed — not treated as fatal. The keys were
+fixed when the coin was created, and rejecting outright would make an *n*-key condition
+unspendable because of one key that could never have verified anything.
+
+At both extension points an unknown value stays spendable, and this is where that has
+teeth: an **unknown lock version** is spent without any signature check, and a signature
+under an **unknown key scheme** counts as satisfied. This is the only place in consensus
+where something unverified is accepted, and it is deliberate — a node cannot check a rule
+that does not exist in it, and rejecting would fork it off the chain the moment the rule
+was deployed. Upgraded nodes do check; a hashpower majority enforcing a rule old nodes
+cannot see is what a soft fork is.
 
 **Block, in two stages.** The split is not cosmetic: a header can arrive unsolicited,
 before the node has the block it claims to build on, so the part that needs no
@@ -648,18 +694,25 @@ context-free validation rules — every rule in "Validation order" above that ne
 neither the UTXO set nor a signature, as `CheckSpendCondition`, `CheckWitness`,
 `CheckTransaction`, `CheckBlockHeader`, `CheckBlock`, and the two rules that are
 contextual but expressible as pure functions of an explicit context,
-`ContextualCheckBlockHeader` and `CheckCoinbaseAmount`.
+`ContextualCheckBlockHeader` and `CheckCoinbaseAmount`; the signature hash, as
+`ComputeSigHashMidstates`, `SignatureHash` and `SpendConditionCommitment`; the signature
+scheme registry over libsecp256k1 and OpenSSL, as `crypto::Verify`, with the startup gate
+that refuses to run a build whose OpenSSL cannot provide a scheme consensus knows; and
+spend authorisation, as `CheckSpendAuthorisation` and `TransactionFee` — the lock
+commitment, the ordered threshold walk against real signatures, and inputs covering
+outputs.
 
-**Specified here but not yet implemented:** the contextual transaction rules — the
-outpoint exists and is unspent, coinbase maturity, the revealed condition hashes to the
-lock's commitment, and inputs covering outputs; the sighash; the signature scheme
-registry and any signature verification at all; the UTXO set; the block index and chain
-selection; persistence; the P2P protocol; the wallet; and difficulty retargeting, which
-is Phase 3 work and deliberately not attempted early.
+**Specified here but not yet implemented:** the two contextual transaction rules that
+need chain state — that an input's outpoint exists and is unspent, and coinbase maturity;
+the UTXO set; the block index and chain selection; persistence; the P2P protocol; the
+wallet; and difficulty retargeting, which is Phase 3 work and deliberately not attempted
+early.
 
-A block that passes `CheckBlock` is therefore **not yet valid**, and the function is
-named for the half it actually does. Nothing in the code is allowed to imply otherwise
-until the rules in the paragraph above exist.
+A block that passes `CheckBlock` is therefore **not yet valid**: it has not been checked
+against the UTXO set, and `CheckBlock` does not call `CheckSpendAuthorisation`, because
+the outputs being spent are not something a block carries. The function is named for the
+half it actually does. Nothing in the code is allowed to imply otherwise until the rules
+in the paragraph above exist.
 
 Where this document and the code disagree, the code is what the network runs, and the
 disagreement is a bug in one of them.

@@ -2,18 +2,21 @@
 /// The Amarian node daemon.
 ///
 /// Phase 0/1 scope: option handling, network selection, logging setup, build
-/// identification, and the startup check that this build's genesis parameters are the
-/// ones the selected network actually uses. The chain, storage and networking layers
+/// identification, and two startup checks — that every consensus signature scheme is
+/// actually usable in this build, and that this build's genesis parameters are the ones
+/// the selected network uses. The chain, storage and networking layers
 /// are introduced in later phases and wired in here. The binary deliberately does not
 /// pretend to do more than it does — `--version`, `--build-info` and `--chain` are
 /// real, and everything else reports honestly that it is not yet available.
 
 #include <amarian/consensus/genesis.hpp>
 #include <amarian/consensus/params.hpp>
+#include <amarian/crypto/signature.hpp>
 #include <amarian/util/args.hpp>
 #include <amarian/util/logging.hpp>
 #include <amarian/version.hpp>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -124,6 +127,43 @@ std::optional<Network> SelectNetwork(const ArgsParser& parser) {
     return network;
 }
 
+/// Verifies that every signature scheme consensus knows about is actually usable in this
+/// build, and reports the list.
+///
+/// A refusal to start rather than a warning. The scheme table is consensus: an output
+/// locked to ML-DSA-44 is spendable only if this binary can verify ML-DSA-44, and a node
+/// whose OpenSSL cannot provide it would not reject those spends — it would report them as
+/// a scheme it does not know and, by the soft-fork rule, accept them unchecked. That is
+/// precisely the failure that must never happen silently: a validator that believes it is
+/// verifying signatures while verifying nothing.
+bool CheckSignatureBackends() {
+    if (const uint16_t missing = crypto::FirstUnavailableScheme();
+        missing != crypto::SCHEME_RESERVED) {
+        const crypto::SchemeSpec* spec = crypto::FindScheme(missing);
+        AMARIAN_ERROR(log::Category::General,
+                      "signature scheme {} ({}) is not available from this build's {}: refusing to "
+                      "start, because a node that cannot verify a consensus scheme would accept "
+                      "spends under it without checking them",
+                      missing,
+                      spec != nullptr ? spec->name : "unknown",
+                      spec != nullptr ? spec->backend : "backend");
+        return false;
+    }
+
+    for (const crypto::SchemeSpec& scheme : crypto::KnownSchemes()) {
+        AMARIAN_INFO(log::Category::General,
+                     "signature scheme {} {} ({}, {} byte key, {} byte signature) via {}",
+                     scheme.id,
+                     scheme.name,
+                     scheme.scheme_class == crypto::SchemeClass::PostQuantum ? "post-quantum"
+                                                                            : "classical",
+                     scheme.public_key_bytes,
+                     scheme.signature_bytes,
+                     scheme.backend);
+    }
+    return true;
+}
+
 /// Verifies that this build's genesis parameters are the selected network's, and
 /// reports the identity a node operator needs to confirm they are on the right chain.
 ///
@@ -193,6 +233,9 @@ int Run(int argc, char* argv[]) {
     AMARIAN_INFO(log::Category::General, "Amarian {} starting", VersionStringLong());
     AMARIAN_INFO(log::Category::General, "user agent {}", UserAgent());
 
+    if (!CheckSignatureBackends()) {
+        return EXIT_FAILURE;
+    }
     if (!ReportChainIdentity(ParamsFor(*network))) {
         return EXIT_FAILURE;
     }

@@ -405,11 +405,13 @@ available and unreviewed from the first block.
 
 ### 23. Every public key carries an explicit scheme identifier
 
-**Implemented, Phase 1**, as far as structure goes. `PublicKey` and `Signature` are both
-`{scheme: u16, bytes}` on the wire, and the codec preserves an unknown scheme rather than
-rejecting it, so a node relays what it cannot verify. The rule that **scheme 0 is never
-valid** is a consensus check, not a parse check, and arrives with the scheme registry —
-`primitives` deliberately decides nothing about validity.
+**Implemented, Phase 1.** `PublicKey` and `Signature` are both `{scheme: u16, bytes}` on
+the wire, and the codec preserves an unknown scheme rather than rejecting it, so a node
+relays what it cannot verify. The rule that **scheme 0 is never valid** is a consensus
+check rather than a parse check — `primitives` deliberately decides nothing about validity
+— and it is enforced in `CheckSpendCondition` and `CheckWitness`, alongside the rule that
+a key or signature under a scheme the registry *knows* must be exactly that scheme's
+length. A scheme the registry does not know has no length to check and is left alone.
 
 A key is `{scheme: u16, bytes}`, never a bare byte string whose meaning is inferred from
 its length. Length inference is how a codebase ends up unable to add a scheme whose key
@@ -586,6 +588,132 @@ consistent — `-fsanitize=integer` is a Clang check, and both sanitizer presets
 
 **Reversed if:** a suppression is ever needed for Amarian's own code. At that point the
 suppression is the wrong tool and the code should change.
+
+### 35. Signature verification answers with five values, not a boolean
+
+**Implemented, 2026-09-05**, in [include/amarian/crypto/signature.hpp](../include/amarian/crypto/signature.hpp).
+
+`crypto::Verify` returns `Valid`, `Invalid`, `Malformed`, `UnknownScheme` or `Reserved`. A
+boolean would collapse the two answers a validator must treat oppositely: "this signature
+is a forgery" is a rejection, and "I do not implement this scheme" is the soft-fork path
+where consensus accepts something it has not checked. Fold them into `false` and a node
+that lacks a scheme rejects valid spends and forks itself off the chain; fold them into
+`true` and a forgery passes. They are not the same fact and the type says so.
+
+`Malformed` is separate from `Invalid` for a narrower reason: a key that is the right length
+for its scheme but that the implementation cannot parse is a different event from a
+signature that simply did not verify, and the two get different treatment in the threshold
+walk — see decision 38.
+
+`Reserved` exists so identifier 0 has a name at every layer. An all-zero field is a
+plausible accident and a plausible attack, and it is never a valid scheme.
+
+**Consequence, and the reason for the startup gate in `amariand`:** because
+`UnknownScheme` is accepting, a node whose OpenSSL cannot supply a *registered* scheme
+would report it as unknown and accept every spend under it while believing it was
+verifying signatures. That is the worst available failure mode, so the node refuses to
+start rather than warning. The check is `crypto::FirstUnavailableScheme()`, probed against
+the real backend at startup, not a compile-time assumption.
+
+**Reversed if:** never for the `Valid`/`Invalid`/`UnknownScheme` distinction, which is
+load-bearing for soft-fork safety. `Malformed` could be merged into `Invalid` if decision
+38 were reversed.
+
+### 36. Spend authorisation takes the spent outputs as a span, not a UTXO handle
+
+**Implemented, 2026-09-05**, in [src/consensus/validation.cpp](../src/consensus/validation.cpp).
+
+`CheckSpendAuthorisation(tx, std::span<const TxOutput> spent_outputs, params)` and
+`TransactionFee(tx, spent_outputs)` are handed the outputs being spent. They do not look
+them up, and they do not know what a database is.
+
+*Finding* those outputs is a lookup; deciding whether they may be spent is arithmetic and
+cryptography. Splitting the two along that line has three consequences worth the slightly
+awkward parameter. The expensive half becomes a pure function of values, so it is testable
+exhaustively without a database — the 16 tests covering it use real ML-DSA-44 signatures
+and no storage at all. It can later run on several threads without a lock, because there
+is no shared state to lock. And it let the rules land *before* the UTXO set instead of
+after it, which is why signature verification is enforced today rather than blocked behind
+a component that had not been written.
+
+`TxOutput` is already `{int64_t amount; Lock lock;}` — literally the output being spent —
+so no new type was invented to carry it. The count is checked against the input count
+rather than assumed, because a caller that got it wrong would otherwise read past the end
+of the span, and a bound that memory safety depends on is not one to take on trust.
+
+**Reversed if:** a rule appears that genuinely needs the whole set rather than the outputs
+one transaction names. Coinbase maturity is not such a rule — it needs a per-coin height,
+which belongs on the `Coin` the UTXO set stores.
+
+### 37. Thresholds are satisfied by ordered forward match
+
+**Implemented, 2026-09-05**, in `SatisfiesThreshold` in
+[src/consensus/validation.cpp](../src/consensus/validation.cpp).
+
+A witness's signatures are matched against its condition's keys with **one key index that
+only ever advances**. Signature *i* is tried against the keys left over after signature
+*i−1* stopped; a key that answers a signature is consumed, and so is a key whose scheme
+does not match. The alternative considered was trying every signature against every key.
+
+Two properties follow, and both are the reason for choosing it.
+
+**Cost.** At most `len(keys)` verifications happen for an input no matter how many
+signatures are offered, and `len(keys)` is capped at 16 by the condition the coin's own
+commitment named. Try-every-pair is quadratic in a count the *spender* chooses, which is a
+denial-of-service vector bought at linear weight — the shape of bug that has cost other
+chains emergency releases.
+
+**No malleability.** Exactly one ordering of a given signature set verifies: the ascending
+one, matching the condition's own ascending key order. Any permutation of a valid witness
+is an invalid witness, so a relay node cannot reorder signatures to produce a second wtxid
+for one transaction. Try-every-pair would accept every permutation, and each would be a
+distinct encoding of the same authorised effect.
+
+The two combine into the property that actually matters for a threshold: because each key
+is consumed at most once, a 2-of-2 cannot be satisfied by offering one key's signature
+twice. Without a monotonic index that would be a 1-of-2 wearing a 2-of-2's address.
+
+Bitcoin's `CHECKMULTISIG` uses the same forward walk, for the same reasons, and has held
+for fifteen years.
+
+**Reversed if:** a future `condition_version` defines aggregation, where one signature
+answers several keys and the walk does not apply. That is a new version with its own
+review, not a change to this one.
+
+### 38. An unparseable key is skipped, not fatal
+
+**Implemented, 2026-09-05**, in `SatisfiesThreshold` in
+[src/consensus/validation.cpp](../src/consensus/validation.cpp).
+
+A key that is the correct length for its scheme but that the implementation cannot parse —
+not a valid curve point, a rejected encoding — is treated exactly like a key whose
+signature failed to verify: the walk moves to the next key. It is not a reason to reject
+the transaction.
+
+The reasoning is specific to how Amarian locks work. The lock is a *commitment* to a
+`SpendCondition`, and the spender reveals it, so the key list was fixed when the coin was
+created and cannot be changed by whoever spends it. If one unparseable key were fatal, an
+*n*-key condition would be permanently unspendable because of a single key that could
+never have verified anything anyway — the owner's other *n*−1 keys, and their coins, gone.
+Skipping leaves the coin spendable by the keys that work, which is what its owner asked
+for.
+
+There is no denial-of-service cost, because decision 37 already bounds the walk at
+`len(keys)` parse attempts. And there is no path by which this weakens authorisation: a
+skipped key cannot satisfy anything, so a threshold still needs `threshold` keys that
+genuinely verify.
+
+**Consequence:** the `TxPublicKeyMalformed` error was removed from `ValidationError`
+rather than left in place. An enumerator naming a rule the code cannot produce is a lie
+about what consensus enforces, and the enumeration is meant to be readable as the complete
+list of reasons a node rejects something.
+
+Bitcoin behaves the same way for the same reason.
+
+**Reversed if:** a scheme is registered whose parse failures are cheap to distinguish from
+verification failures *and* whose keys are validated when the lock is created rather than
+when it is spent. Neither is true of any registered scheme, since a commitment hides the
+key until it is revealed.
 
 ## Still open
 

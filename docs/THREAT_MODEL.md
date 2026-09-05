@@ -15,15 +15,21 @@ stop. This one is meant to be the input to
 that every class listed here has a regression test that fails if the defence is
 removed.
 
-**Updated 2026-09-05**, part way through Phase 1: eight rows now read **yes**,
-all of them in the deserialisation and transaction-identity classes, which are
-the parts of Phase 1 that have landed with tests. Nothing in the supply,
-authorisation, proof-of-work or network classes reads **yes**, and the reason
-differs by row — some of that code does not exist, and some of it now exists
-without a test. The context-free validation rules
-([src/consensus/validation.cpp](../src/consensus/validation.cpp)) landed on this
-date and are marked **implemented, untested** where they defend a row; that is a
-weaker claim than **yes** deliberately, because a rule nothing exercises is a rule
+**Updated 2026-09-05**, part way through Phase 1: nineteen rows now read **yes**.
+The spend-authorisation class is the one that changed most, and it changed because
+signature verification is now wired into consensus: `CheckSpendAuthorisation` checks
+the lock commitment, walks the threshold, and calls `crypto::Verify`, and the tests
+that cover it use real ML-DSA-44 signatures rather than stubs. Every row in that
+class now reads **yes** or **partial**, where before Phase 1's authorisation work
+landed they read **no**.
+
+Nothing in the proof-of-work or network classes reads **yes**, and one row in the
+supply class still cannot: the coinbase fee bound needs a total summed across a
+block's transactions, and supplying the outputs those transactions spend is the UTXO
+set's job, which is the next component. The context-free validation rules
+([src/consensus/validation.cpp](../src/consensus/validation.cpp)) are marked
+**implemented, untested** where they defend a row and nothing exercises them; that is
+a weaker claim than **yes** deliberately, because a rule nothing exercises is a rule
 nobody has checked. A row marked **yes** means a named test exists and is in the
 suite; it does not yet mean the stronger Phase 9 property that the test fails when
 the defence is removed. Where that stronger property has been checked by mutation,
@@ -104,10 +110,10 @@ the defence is implemented; **Tested** is the current honest state.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 1, 2 | implemented, untested — `CheckCoinbaseAmount`. The reward half is complete and derived from height alone; the fee half is a parameter until the UTXO set can produce it |
-| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | no — structurally guaranteed so far only in that no block field carries a fee total for a node to trust |
-| Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | no — needs the UTXO set to know what the inputs are worth |
-| Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 1, 2 | partial — the per-amount bound is in and tested; the output-side summing rule is implemented in `CheckTransaction` and `CheckCoinbaseAmount` but untested; the input side is Phase 2 |
+| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 1, 2 | implemented, untested — `CheckCoinbaseAmount`. The reward half is complete and derived from height alone. The fee half is now computable — `TransactionFee` derives a transaction's fee from the outputs it spends and is tested — but nothing yet sums it across a block, because that needs the UTXO set to supply those outputs |
+| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | partial — structurally guaranteed in that no block field carries a fee total for a node to trust, and `TransactionFee` is the only function that produces one, from spent outputs and paid outputs alone. Untested at block level, which needs the UTXO set |
+| Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | **yes** — `Validation.ATransactionMayNotPayOutMoreThanItSpends` and `.TheFeeIsWhatIsSpentMinusWhatIsPaid`. `TransactionFee` rejects any transaction paying out more than it spends; *finding* the outputs it spends is the UTXO set's job and is separate from this rule |
+| Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 1, 2 | **yes** on both sides — `Validation.AmountsOutsideTheMoneyRangeAreRejectedOnBothSides` and `TransactionPrimitive.OutputAmountIsRangeCheckedAtTheWholeTransactionLevel`. Both running totals are re-checked against the money range at every step, so a sum that leaves it is rejected at the addition that took it out rather than after wrapping |
 | Negative amount | A signed amount below zero | Amounts are validated on deserialisation, not at point of use | 1, 2 | **yes** — `TransactionPrimitive.OutputAmountIsRangeCheckedAtTheWholeTransactionLevel`. No code path in the node can hold a `TxOutput` outside `[0, MAX_MONEY]`, and `CheckTransaction` re-checks so that a transaction built in memory gets the same verdict as one parsed off the wire |
 | Duplicate coinbase | Two coinbase transactions in one block | Exactly one, at index 0 | 1 | implemented, untested — `CheckBlock` rejects a block whose first transaction is not a coinbase and one that contains a second |
 | Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | no — needs the UTXO set to know which height a coin was created at |
@@ -122,16 +128,17 @@ function of height with no parameters an operator can set.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Forged signature | A signature that verifies without the key | Not Amarian's to defend — libsecp256k1 and OpenSSL. Amarian's job is calling them correctly | 1, 6 | no |
-| Signature malleability | A second encoding of the same signature, giving a second valid txid | BIP-340 signatures are fixed 64 bytes with no encoding freedom; ML-DSA signatures are fixed-length; any variable-length encoding must be checked canonical on parse, not on use | 1, 6 | no |
-| Signature reuse across contexts | A signature valid for one transaction accepted for another | Sighash commits to inputs, outputs, the spent amount, the spend condition, and a network-specific `chain_id` | 1 | no |
-| Cross-chain replay | A mainnet transaction replayed on testnet or vice versa | `chain_id` in the sighash preimage, distinct per network | 1 | no |
-| Cross-input replay | A signature for input 0 accepted for input 1 | The input index is in the preimage | 1 | no |
-| Wrong-key substitution | Spending with a key that is not the one committed to | Lock commits to a hash of the whole `SpendCondition`; the revealed condition is hashed and compared before any signature is checked | 1 | no |
-| Threshold bypass | Satisfying a 2-of-3 with one signature counted twice | Each satisfied key counted at most once; duplicate keys in a condition rejected at construction | 1 | partial — the duplicate-key half is implemented, untested: `CheckSpendCondition` requires the key list to be strictly ascending, which rejects duplicates and pins the ordering at the same time. The counting half arrives with signature verification |
+| Forged signature | A signature that verifies without the key | Not Amarian's to defend — libsecp256k1 and OpenSSL. Amarian's job is calling them correctly | 1, 6 | **yes** for the calling half — `CryptoSignature.SchnorrVerifiesBip340Vector` against published vectors, `.MlDsa44RoundTrips`, `.SlhDsaSha2128sRoundTrips`, `.SchnorrRejectsAMutatedSignature`, and `Validation.ARealSignatureAuthorisesASingleKeySpend` end to end through consensus with a real signature. The primitives themselves remain the libraries' claim, not Amarian's |
+| Signature malleability | A second encoding of the same signature, giving a second valid txid | BIP-340 signatures are fixed 64 bytes with no encoding freedom; ML-DSA signatures are fixed-length; any variable-length encoding must be checked canonical on parse, not on use | 1, 6 | **yes** for fixed-length enforcement — `Validation.AKeyOrSignatureOfTheWrongLengthIsRejectedStructurally` and `CryptoSignature.WrongLengthsAreRejectedBeforeAnyImplementationIsCalled`: a signature under a scheme this build knows must be exactly that scheme's length, checked in the context-free pass. Witness *ordering* malleability is separately closed by the ordered forward match — `Validation.ATwoOfTwoNeedsBothSignaturesInKeyOrder`. No variable-length signature scheme is registered yet, so the canonical-parse half has nothing to check |
+| Signature reuse across contexts | A signature valid for one transaction accepted for another | Sighash commits to inputs, outputs, the spent amount, the spend condition, and a network-specific `chain_id` | 1 | **yes** — `PrimitivesSigHash.CommitsToEveryOutpoint`, `.CommitsToEverySequence`, `.CommitsToEveryOutputAmountAndLock`, `.CommitsToTheInputAndOutputCounts`, `.CommitsToTheSpentAmount`, `.CommitsToTheRevealedCondition`, `.CommitsToTheTransactionVersionAndLocktime`, and `Validation.ASignatureOverADifferentSpentAmountDoesNotAuthorise` showing the rejection through consensus rather than only a differing hash |
+| Cross-chain replay | A mainnet transaction replayed on testnet or vice versa | `chain_id` in the sighash preimage, distinct per network | 1 | **yes** — `PrimitivesSigHash.CommitsToTheChainId`, and `ConsensusParams` asserts the three networks' `chain_id` values differ |
+| Cross-input replay | A signature for input 0 accepted for input 1 | The input index is in the preimage | 1 | **yes** — `PrimitivesSigHash.CommitsToTheInputIndex` |
+| Wrong-key substitution | Spending with a key that is not the one committed to | Lock commits to a hash of the whole `SpendCondition`; the revealed condition is hashed and compared before any signature is checked | 1 | **yes** — `Validation.TheRevealedConditionMustBeTheOneTheOutputCommittedTo`, in which the attacker reveals a condition they control together with a signature that is perfectly valid for it, and `.ALockProgramOfTheWrongLengthMatchesNothing`. Also `PrimitivesSigHash.TheConditionCommitmentIsWhatAVersionOneLockHolds` |
+| Threshold bypass | Satisfying a 2-of-3 with one signature counted twice | Each satisfied key counted at most once by the ordered forward match; duplicate keys in a condition rejected at construction | 1 | **yes** — `Validation.AThresholdIsNotMetByOfferingOneKeysSignatureTwice` for the counting half, `.ATwoOfTwoNeedsBothSignaturesInKeyOrder` for the ordering, and `.OneOfTwoIsSatisfiedByEitherKeyAlone` so the rule is not merely restrictive. The duplicate-key half remains implemented, untested: `CheckSpendCondition` requires the key list to be strictly ascending, which rejects duplicates and pins the ordering at the same time |
 | Hash collision on a lock | Two spend conditions with the same commitment | 256-bit commitment; also why the commitment is domain-separated from every other hash use | 1 | no |
 | Domain confusion | A hash from one context accepted in another | Tagged hashing throughout, with the tag part of the preimage | 1 | **yes** — `CryptoHash.TagsDomainSeparateTheSameMessage`, and the BIP-340 construction itself is checked against published vectors |
-| Quantum key recovery from an exposed key | Shor's algorithm on a published public key | Locks commit to a hash, never a key; post-quantum schemes available from the first block. The mempool window is residual and acknowledged | 1, 6 | no |
+| Quantum key recovery from an exposed key | Shor's algorithm on a published public key | Locks commit to a hash, never a key; post-quantum schemes available from the first block. The mempool window is residual and acknowledged | 1, 6 | partial — both post-quantum schemes are registered and verifiable in consensus today, tested by `CryptoSignature.MlDsa44RoundTrips`, `.SlhDsaSha2128sRoundTrips` and `.ThePostQuantumSchemesRestOnUnrelatedAssumptions`; `amariand` refuses to start if its backend cannot supply one. What is missing is not verification but *use*: no wallet or address format produces such an output yet, which is Phase 6 |
+| Unknown scheme accepted unchecked | Locking coins to a scheme identifier no node implements, so that every node treats the signature as satisfied | Deliberate and not a defect: an unknown scheme counts as satisfied, because a node cannot check a rule it does not contain, and rejecting would fork it off the chain the instant the scheme was deployed. What bounds it is that a scheme only becomes usable when a hashpower majority enforces it, and that identifier 0 is reserved and always rejected so an all-zero field is never a valid scheme | 1, 8 | **yes**, in the sense that the accepting behaviour is the specified behaviour and is pinned by `Validation.AnUnknownKeySchemeCountsAsSatisfied` and `.AnUnknownLockVersionStaysSpendableWithoutASignatureCheck`, and the reserved identifier by `CryptoSignature.ReservedSchemeIsNeverVerifiable`. The residual risk is a user locking coins to an identifier nothing will ever enforce — a wallet problem, addressed by Phase 8's activation mechanics, not a consensus one |
 
 Three further rows belong to this class but are about a transaction's *identity*
 rather than its authorisation, and they are the part of it Phase 1 has settled.
@@ -203,7 +210,8 @@ worth doing.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Quadratic validation cost | A transaction whose signature hashing grows with the square of its size (Bitcoin's pre-SegWit sighash flaw) | Sighash midstate reuse so each input's preimage is linear; committed to in the design before the format is fixed rather than patched later | 1 | no |
+| Quadratic validation cost | A transaction whose signature hashing grows with the square of its size (Bitcoin's pre-SegWit sighash flaw) | Sighash midstate reuse so each input's preimage is linear; committed to in the design before the format is fixed rather than patched later | 1 | **yes** — `PrimitivesSigHash.ThePreimageIsAlwaysTheDocumentedFixedSize` asserts the preimage is 181 bytes regardless of the transaction's size, and `CheckSpendAuthorisation` calls `ComputeSigHashMidstates` once per transaction rather than once per input, so total hashing is linear in transaction size |
+| Signature-count amplification | An input offering many more signatures than its condition has keys, so a naive matcher tries every pair | Ordered forward match: one monotonically advancing key index across the whole signature list, so at most `len(keys)` verifications happen per input no matter how many signatures are offered — and `len(keys)` is capped at 16 by the condition the coin's own commitment named | 1 | **yes** — the bound is structural in `SatisfiesThreshold`, and `Validation.AThresholdIsNotMetByOfferingOneKeysSignatureTwice` exercises the case where a signature is offered that no remaining key can answer. `CheckWitness` additionally requires exactly `threshold` signatures, so the list length is not free either |
 | Expensive-to-validate block | A block filled with maximally costly inputs | Weight limit bounds size; measured per-block verification CPU for post-quantum schemes is 0.064–0.113 s against a 300 s interval, so the current parameters have four orders of magnitude of headroom | 1, 6 | partial — the weight limit is implemented, untested: `CheckBlock` measures the block's weight by serialising it and `CheckTransaction` bounds each transaction, so the cost of a block is bounded before any signature is verified. The measurement in the middle column is a real benchmark, recorded in [PQ_CRYPTO.md](PQ_CRYPTO.md) |
 | Memory exhaustion on deserialisation | A length prefix declaring a gigabyte | Every length checked against the remaining buffer *before* allocation, never against a constant alone, using a per-element minimum encoded size so a count is bounded by the bytes that could possibly satisfy it | 1 | **yes** — `CompactSize.RejectsACountLargerThanTheBytesRemaining`, `.BoundScalesWithElementSize`, `.ZeroElementSizeIsRejectedRatherThanWideningTheBound`, `ByteString.RejectsLengthBeyondTheBuffer`, `TransactionPrimitive.CountsAboveTheLimitsAreRejected`, and 21 million `fuzz_serialize` executions with a peak RSS the run records |
 | Deeply nested or recursive structure | Blowing the stack during parsing | Structures are flat by design; no recursive descent in consensus deserialisation | 1 | partial — true by construction and exercised by `fuzz_serialize`, but no test asserts the absence of recursion |
@@ -292,6 +300,17 @@ here than an established one, and no design choice in this project changes that.
 **A compromised machine.** Malware, a hostile operator, physical access, or a
 compromised OS. If the attacker is inside the machine, they have the keys.
 
+**Coins locked to a scheme or lock version nothing enforces.** Consensus accepts an
+unknown key scheme as satisfied and an unknown lock version as spendable without any
+check, because a node cannot enforce a rule it does not contain and rejecting would
+fork it off the chain the moment the rule was deployed. The consequence is that coins
+sent to an identifier no deployed node implements are spendable by anyone. This is
+not a consensus hole — it is what makes soft-fork extension possible at all, and the
+protection is that upgraded nodes do check, so the identifier only becomes *usable*
+once a hashpower majority enforces it. It does mean a wallet must never let a user
+lock coins to an unactivated identifier, which is Phase 8's problem rather than
+consensus's.
+
 **Traffic analysis by a global observer.** Someone who sees all network traffic can
 correlate broadcasts. Amarian is not an anonymity network and does not claim to be.
 
@@ -344,22 +363,19 @@ false is a security report, and a valuable one.
 
 | Class | Defence designed | Defence implemented | Regression test |
 |---|---|---|---|
-| Supply integrity | yes | the per-amount bound, plus the coinbase, height and output-sum rules | one row, on the amount bound |
-| Spend authorisation | yes | structure and identity only, no verification | three rows, all on transaction identity |
+| Supply integrity | yes | the per-amount bound, the coinbase, height and output-sum rules, and the per-transaction fee rule | three rows: the amount bound, both summing sides, and outputs-exceed-inputs |
+| Spend authorisation | yes | structure, identity, and verification — the lock commitment, the threshold walk and `crypto::Verify` | ten rows, on identity, the sighash commitments, the commitment check and the threshold |
 | Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers, canonical encoding | encoding rows only |
 | Proof of work and chain selection | yes | the target codec and the per-header work check; no chain selection | one row on the Merkle construction, plus the target codec |
-| Resource exhaustion | yes | the deserialisation rows, plus the weight limit | two rows, one of them fuzzed |
+| Resource exhaustion | yes | the deserialisation rows, the weight limit, the linear sighash and the bounded threshold walk | four rows, one of them fuzzed |
 | Network layer | outline only | no | no |
 | Wallet | outline only | no | no |
 | Build and supply chain | yes | mostly | one, informal |
-| Cryptographic agility | yes | explicit scheme identifiers only | no |
+| Cryptographic agility | yes | explicit scheme identifiers, a registry over two backends, and a startup gate on availability | the registry's self-consistency and both extension points' soft-fork behaviour |
 
-Every class still has more "no" in it than "yes", which is what Phase 1 of 13
-looks like part way through. A document claiming otherwise would be the more
-serious defect. The third column moved on 2026-09-05 and the fourth did not, which
-is the honest shape of a component that landed today: the **Regression test** column
-is the one that decides whether a defence is real, and it says "no" for every rule
-in that commit.
+Every class still has more "no" in it than "yes", which is what Phase 1 of 13 looks
+like part way through. A document claiming otherwise would be the more serious
+defect.
 
 What exists today that belongs in this table at all: the layering contract enforced
 by the linker; checked arithmetic with `-fwrapv` behind it; hardening flags that
@@ -368,16 +384,19 @@ integer findings now fatal rather than recoverable; the canonical codec with its
 reject-not-normalise rule, sticky failure and bounds-before-allocation; consensus
 hashing checked against published vectors; the transaction primitives with the
 txid/wtxid split and the Merkle construction; three fuzz harnesses, the widest of
-which covers the deserialisation perimeter itself; and — new on this date — the
-context-free validation rules, which are implemented and not yet tested.
+which covers the deserialisation perimeter itself; the context-free validation
+rules; the signature scheme registry over libsecp256k1 and OpenSSL with the startup
+gate that refuses to run a build missing one; the fixed-size signature hash; and
+spend authorisation itself — the lock commitment, the ordered threshold walk against
+real signatures, and the rule that a transaction cannot pay out more than it spends.
 
-What does not exist: any rule that needs to consult *state*. No signature is
-verified, no input amount is known, no chain is selected. A target is compared and
-an output sum is checked, but only within one block considered alone: nothing in the
-tree can yet answer "does this input exist, and is it still unspent", because that
-question needs the UTXO set. Everything in the network and wallet classes, and the
-half of the supply class that depends on inputs, is therefore still a plan, and the
-rows say so.
+What does not exist: any rule that needs to consult *state*. No input's existence is
+established, no chain is selected. Signatures are now verified and inputs are summed,
+but against outputs a caller supplies rather than ones a node looked up: nothing in
+the tree can yet answer "does this input exist, and is it still unspent", or "was
+this coinbase output created 200 blocks ago", because both questions need the UTXO
+set. Everything in the network and wallet classes, and the block-level half of the
+supply class, is therefore still a plan, and the rows say so.
 
 [Phase 9](ROADMAP.md#phase-9--security-engineering) is where every row above
 acquires a test that fails when the defence is removed — a stronger property than

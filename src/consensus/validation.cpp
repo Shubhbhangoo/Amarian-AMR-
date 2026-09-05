@@ -5,17 +5,29 @@
 #include <amarian/consensus/issuance.hpp>
 #include <amarian/consensus/target.hpp>
 #include <amarian/consensus/validation.hpp>
+#include <amarian/crypto/signature.hpp>
+#include <amarian/primitives/lock.hpp>
+#include <amarian/primitives/sighash.hpp>
 #include <amarian/util/overflow.hpp>
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <unordered_set>
 #include <vector>
 
 namespace amarian::consensus {
 namespace {
+
+/// The reserved scheme id is declared twice — once in `primitives` for the data types
+/// and once in `crypto` for the registry — because the two namespaces cannot share it
+/// without primitives depending on the registry. This is the assertion that the
+/// duplication stays a duplication rather than becoming a disagreement.
+static_assert(amarian::SCHEME_RESERVED == crypto::SCHEME_RESERVED,
+              "the reserved signature scheme id must be the same value in both layers");
 
 /// Odd 64-bit multiplier — the golden ratio's reciprocal scaled to 2^64 — so that the
 /// outpoint index below influences every bit of the mix rather than only the low ones.
@@ -42,6 +54,32 @@ struct OutPointHash {
 };
 
 using OutPointSet = std::unordered_set<OutPoint, OutPointHash>;
+
+/// Whether a key's length disagrees with what its scheme's registry entry claims.
+///
+/// A scheme this build has never heard of has no length to disagree with, so it is not
+/// wrong — it is unknown, and is left for the soft-fork path to accept.
+[[nodiscard]] bool HasWrongPublicKeySize(const PublicKey& key) noexcept {
+    const crypto::SchemeSpec* spec = crypto::FindScheme(key.scheme);
+    return spec != nullptr && key.bytes.size() != spec->public_key_bytes;
+}
+
+/// The same question for a signature.
+[[nodiscard]] bool HasWrongSignatureSize(const Signature& signature) noexcept {
+    const crypto::SchemeSpec* spec = crypto::FindScheme(signature.scheme);
+    return spec != nullptr && signature.bytes.size() != spec->signature_bytes;
+}
+
+/// Whether a version-1 lock's program is exactly the commitment to `condition`.
+///
+/// A program of any length other than 32 cannot be a commitment, so it simply does not
+/// match — there is no separate malformed-lock verdict, because a lock whose program is
+/// the wrong length is a lock no condition satisfies. Both values are public, so this is
+/// an ordinary comparison and not a constant-time one.
+[[nodiscard]] bool MatchesConditionCommitment(const Lock& lock, const SpendCondition& condition) {
+    const Hash256 commitment = SpendConditionCommitment(condition);
+    return std::ranges::equal(lock.program, commitment.Span());
+}
 
 }  // namespace
 
@@ -109,6 +147,25 @@ std::string_view Describe(ValidationError error) noexcept {
             return "witness does not carry exactly threshold signatures";
         case ValidationError::WitnessSignatureSchemeReserved:
             return "witness uses reserved signature scheme 0";
+        case ValidationError::ConditionKeyWrongSize:
+            return "public key is not the length its scheme defines";
+        case ValidationError::WitnessSignatureWrongSize:
+            return "signature is not the length its scheme defines";
+
+        case ValidationError::TxCoinbaseAuthorisesNothing:
+            return "coinbase has no inputs to authorise and pays no fee";
+        case ValidationError::TxSpentOutputCountMismatch:
+            return "not exactly one spent output was supplied per input";
+        case ValidationError::TxSpendsUnspendableOutput:
+            return "input spends an output locked with unspendable lock version 0";
+        case ValidationError::TxConditionDoesNotMatchLock:
+            return "revealed spend condition is not the one the output committed to";
+        case ValidationError::TxSignatureDoesNotVerify:
+            return "no key in the spend condition verifies the signature offered";
+        case ValidationError::TxInputSumOutOfRange:
+            return "spent amounts sum outside [0, MAX_MONEY]";
+        case ValidationError::TxOutputsExceedInputs:
+            return "transaction pays out more than it spends";
 
         case ValidationError::BlockNoTransactions:
             return "block has no transactions";
@@ -168,6 +225,13 @@ Verdict CheckSpendCondition(const SpendCondition& condition, const ChainParams& 
         if (condition.keys[index].scheme == SCHEME_RESERVED) {
             return Reject(ValidationError::ConditionKeySchemeReserved);
         }
+        // A key of the wrong length for a scheme this build knows can never verify
+        // anything, and finding that out costs one integer comparison here instead of a
+        // call into a cryptographic library later. A key under an *unknown* scheme has no
+        // length to check against and is deliberately left alone.
+        if (HasWrongPublicKeySize(condition.keys[index])) {
+            return Reject(ValidationError::ConditionKeyWrongSize);
+        }
         if (index > 0 && !(condition.keys[index - 1] < condition.keys[index])) {
             return Reject(ValidationError::ConditionKeysNotStrictlyOrdered);
         }
@@ -198,6 +262,18 @@ Verdict CheckWitness(const Witness& witness, const ChainParams& params) {
     for (const Signature& signature : witness.signatures) {
         if (signature.scheme == SCHEME_RESERVED) {
             return Reject(ValidationError::WitnessSignatureSchemeReserved);
+        }
+    }
+
+    // Signature lengths, like key lengths, only under the version this node understands.
+    // A future condition version is free to define a different relationship between its
+    // signatures and the registry — aggregation, for one — and this build cannot know
+    // what that is, so it does not impose today's answer on it.
+    if (witness.condition.version == CONDITION_VERSION_THRESHOLD) {
+        for (const Signature& signature : witness.signatures) {
+            if (HasWrongSignatureSize(signature)) {
+                return Reject(ValidationError::WitnessSignatureWrongSize);
+            }
         }
     }
     return Accept();
@@ -291,6 +367,175 @@ Verdict CheckTransaction(const Transaction& tx, const ChainParams& params) {
     // Last, because it is the only context-free check that serialises the transaction.
     if (tx.Weight() > params.max_block_weight) {
         return Reject(ValidationError::TxWeightTooLarge);
+    }
+    return Accept();
+}
+
+// --- Spend authorisation ---------------------------------------------------------
+
+namespace {
+
+/// Whether `witness` satisfies its own threshold condition for `message`.
+///
+/// Ordered forward match: `key_index` only ever advances, so signature *i* is tried
+/// against the keys left over from signature *i−1*. At most one verification happens per
+/// key for the entire witness, which bounds the cost by the key count the condition's own
+/// commitment fixed — and makes the ascending order the only one that verifies, so a
+/// permuted witness is an invalid witness rather than a second encoding of a valid one.
+[[nodiscard]] Verdict SatisfiesThreshold(const Witness& witness, const Hash256& message) {
+    size_t key_index = 0;
+    for (const Signature& signature : witness.signatures) {
+        bool satisfied = false;
+        while (key_index < witness.condition.keys.size()) {
+            const PublicKey& key = witness.condition.keys[key_index];
+            ++key_index;
+            if (key.scheme != signature.scheme) {
+                // A key for another scheme cannot answer this signature. It is consumed
+                // rather than left to be reconsidered later, which is exactly what keeps
+                // the walk linear and the valid ordering unique.
+                continue;
+            }
+            switch (crypto::Verify(signature.scheme, key.bytes, signature.bytes, message)) {
+                case crypto::VerifyResult::Valid:
+                    satisfied = true;
+                    break;
+                case crypto::VerifyResult::UnknownScheme:
+                    // The soft-fork path, and the one place consensus accepts something
+                    // it has not checked. This build cannot verify a scheme it does not
+                    // implement, and calling it a forgery would fork this node off the
+                    // chain the moment the scheme was deployed. Upgraded nodes do check
+                    // it; a hashpower majority enforcing a rule old nodes cannot see is
+                    // what a soft fork is.
+                    satisfied = true;
+                    break;
+                case crypto::VerifyResult::Invalid:
+                case crypto::VerifyResult::Malformed:
+                    // This key does not answer this signature, so the next one is tried.
+                    // `Malformed` here can only be a right-length key the implementation
+                    // cannot parse: skipped rather than fatal, because the keys were fixed
+                    // when the coin was created and one unusable key must not make the
+                    // other n−1 unspendable.
+                    break;
+                case crypto::VerifyResult::Reserved:
+                    // Unreachable: scheme 0 is rejected structurally in both the condition
+                    // and the witness, long before this. Named rather than defaulted so
+                    // that a new VerifyResult is a build failure here.
+                    return Reject(ValidationError::WitnessSignatureSchemeReserved);
+            }
+            if (satisfied) {
+                break;
+            }
+        }
+        if (!satisfied) {
+            return Reject(ValidationError::TxSignatureDoesNotVerify);
+        }
+    }
+    return Accept();
+}
+
+}  // namespace
+
+Computed<int64_t> TransactionFee(const Transaction& tx, std::span<const TxOutput> spent_outputs) {
+    if (tx.IsCoinbase()) {
+        return std::unexpected(ValidationError::TxCoinbaseAuthorisesNothing);
+    }
+    if (spent_outputs.size() != tx.inputs.size()) {
+        return std::unexpected(ValidationError::TxSpentOutputCountMismatch);
+    }
+
+    // Both sums are range-checked at every step rather than only at the end. A running
+    // total that leaves the money range has already lost the property that makes the
+    // comparison below meaningful, and `TryAccumulate` reports the overflow instead of
+    // wrapping into a value that would look like a smaller amount.
+    int64_t spent = 0;
+    for (const TxOutput& output : spent_outputs) {
+        if (!IsValidAmount(output.amount) || !TryAccumulate(spent, output.amount) ||
+            !IsValidAmount(spent)) {
+            return std::unexpected(ValidationError::TxInputSumOutOfRange);
+        }
+    }
+
+    int64_t paid = 0;
+    for (const TxOutput& output : tx.outputs) {
+        if (!IsValidAmount(output.amount) || !TryAccumulate(paid, output.amount) ||
+            !IsValidAmount(paid)) {
+            return std::unexpected(ValidationError::TxOutputSumOutOfRange);
+        }
+    }
+
+    // Half of the supply guarantee. No transaction may pay out more than it spends, so
+    // no transaction can create value; the coinbase, which is allowed to, is bounded by
+    // `CheckCoinbaseAmount` against the schedule instead.
+    if (paid > spent) {
+        return std::unexpected(ValidationError::TxOutputsExceedInputs);
+    }
+    // Cannot overflow: both are in [0, MAX_MONEY] and `paid` is no larger than `spent`.
+    return spent - paid;
+}
+
+Verdict CheckSpendAuthorisation(const Transaction& tx,
+                                std::span<const TxOutput> spent_outputs,
+                                const ChainParams& params) {
+    if (tx.IsCoinbase()) {
+        return Reject(ValidationError::TxCoinbaseAuthorisesNothing);
+    }
+    if (spent_outputs.size() != tx.inputs.size()) {
+        return Reject(ValidationError::TxSpentOutputCountMismatch);
+    }
+    // `CheckTransaction` already guarantees this. It is re-checked because that guarantee
+    // is what stops the indexing below from running past the end of a caller's vector,
+    // and a bound that memory safety depends on is not one to take on trust.
+    if (tx.witnesses.size() != tx.inputs.size()) {
+        return Reject(ValidationError::TxWitnessCountMismatch);
+    }
+
+    // Once for the whole transaction, not once per input. This is the entire reason
+    // `SigHashMidstates` is a separate type: it makes the cost of verifying a transaction
+    // linear in its size rather than quadratic, and that is a property of *where* this
+    // line is, so it is worth a comment saying so.
+    const SigHashMidstates midstates = ComputeSigHashMidstates(tx);
+
+    for (size_t index = 0; index < tx.inputs.size(); ++index) {
+        const TxOutput& spent = spent_outputs[index];
+        const Witness& witness = tx.witnesses[index];
+
+        if (spent.lock.IsUnspendable()) {
+            return Reject(ValidationError::TxSpendsUnspendableOutput);
+        }
+        if (spent.lock.version != LOCK_VERSION_CONDITION_COMMITMENT) {
+            // An unknown lock version has no rules in this build, so there is nothing
+            // here to enforce and the output stays spendable. Not a hole: no wallet
+            // creates outputs under a version that has not been defined, and once one is,
+            // the upgraded majority enforces it.
+            continue;
+        }
+
+        // The revealed condition must be the one the coin committed to. This is what makes
+        // a version-1 lock a lock at all: 32 bytes in the output decide, by preimage
+        // resistance, exactly which key set and threshold may spend it.
+        if (!MatchesConditionCommitment(spent.lock, witness.condition)) {
+            return Reject(ValidationError::TxConditionDoesNotMatchLock);
+        }
+        if (witness.condition.version != CONDITION_VERSION_THRESHOLD) {
+            // The commitment above still bound the spender to the exact condition the coin
+            // named, because that check hashes the serialised bytes and so does not depend
+            // on the version. What an unknown version's signatures *mean* is the part this
+            // build does not know, and it does not guess.
+            continue;
+        }
+
+        // The spent amount is committed here, which is why a signature cannot be replayed
+        // against a different output of the same condition, and why the fee a transaction
+        // pays is fixed by its signatures rather than by whatever a relayer claims.
+        const Hash256 message = SignatureHash(params.chain_id,
+                                              tx,
+                                              midstates,
+                                              static_cast<uint32_t>(index),
+                                              spent.amount,
+                                              witness.condition);
+        if (const Verdict satisfied = SatisfiesThreshold(witness, message); !satisfied) {
+            return satisfied;
+        }
     }
     return Accept();
 }

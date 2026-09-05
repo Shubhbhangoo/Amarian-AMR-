@@ -33,8 +33,14 @@ amarian_add_test(test_consensus unit
     consensus_issuance_test.cpp
     consensus_params_test.cpp
     consensus_target_test.cpp
+    consensus_validation_test.cpp
 )
-target_link_libraries(test_consensus PRIVATE amarian::consensus)
+# OpenSSL for the same reason test_crypto links it, and only for that reason: the spend
+# authorisation rules cannot be tested against anything but real signatures, and the node
+# deliberately cannot produce one. ML-DSA-44 is used rather than Schnorr so that this stays
+# the single already-documented exception instead of also exposing libsecp256k1's signing
+# API to a test.
+target_link_libraries(test_consensus PRIVATE amarian::consensus amarian::openssl)
 
 amarian_add_test(test_version unit
     version_test.cpp

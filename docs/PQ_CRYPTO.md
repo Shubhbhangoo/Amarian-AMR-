@@ -275,19 +275,34 @@ The claims in this document hold if and only if:
    the kind that affects TLS traffic. If such a feature is ever added, this
    assumption stops holding and a key-encapsulation mechanism enters the design.
 
-## Not done yet
+## What is built, and what is not
 
-To be unambiguous about the gap between this document and the code: **there is no
-cryptography in this repository at all yet.** No `crypto` layer, no scheme
-registry, no signature verification, no key handling. OpenSSL and libsecp256k1 are
-resolved as build dependencies and were exercised by hand to confirm they work and
-to produce the measurements above; nothing in `src/` calls them except a version
-banner.
+To be unambiguous about the gap between this document and the code: the `crypto` layer
+exists, and so does everything the roadmap put in Phase 1. `crypto/signature.hpp`
+defines the scheme registry — identifier, key length, signature length, class, backend
+name, availability probe — with all three schemes in the table above registered:
+BIP-340 Schnorr over libsecp256k1, and ML-DSA-44 and SLH-DSA-SHA2-128s over OpenSSL's
+default provider. `crypto::Verify` dispatches through it and returns a four-way answer
+(`Valid`, `Invalid`, `Malformed`, `UnknownScheme`, plus `Reserved` for identifier 0)
+rather than a boolean, because "I cannot check this" and "this is a forgery" must not be
+the same value to a validator. Consensus calls it from `CheckSpendAuthorisation`, over
+the `Amarian/SigHash` message described in
+[AMARIAN_PROTOCOL.md](AMARIAN_PROTOCOL.md#signature-hash), and it is exercised in tests
+against real signatures rather than fixtures.
 
-What remains: the scheme registry and its interfaces (Phase 1), BIP-340 Schnorr
-verification (Phase 1), ML-DSA integration end to end (Phase 6), a decision on
-hybrid authorisation (Phase 7), activation and deprecation mechanics (Phase 8), and
-a BIP-340 benchmark on the same machine so the classical baseline in this document
+`amariand` refuses to start if any registered scheme is unavailable from this build's
+backend. That is a startup gate rather than a warning for a specific reason: an
+unavailable scheme would be reported as one the node does not know, and by the
+soft-fork rule an unknown scheme counts as satisfied — so the node would accept every
+spend under it without checking, while believing it was verifying signatures.
+
+ML-DSA-44 and SLH-DSA-SHA2-128s are therefore *verifiable* today, which is not the same
+as the Phase 6 goal: no wallet creates outputs under them, no migration path exists, and
+no address format encodes them.
+
+What remains: a decision on hybrid authorisation (Phase 7), activation and deprecation
+mechanics (Phase 8), wallet and address support for the post-quantum schemes (Phase 6),
+and a BIP-340 benchmark on the same machine so the classical baseline in this document
 can be replaced with the scheme actually used.
 
 

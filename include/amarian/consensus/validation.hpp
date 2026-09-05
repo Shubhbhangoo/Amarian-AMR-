@@ -24,12 +24,15 @@
 ///
 /// ## What is not here yet
 ///
-/// The contextual transaction rules — the outpoint exists and is unspent, coinbase
-/// maturity, the revealed condition hashes to the lock's commitment, inputs cover
-/// outputs, and signature verification — need the UTXO set and the signature scheme
-/// registry, which are the next two components. Their absence is why `CheckBlock`
-/// below is explicit that it is the context-free half: a block that passes it is not
-/// yet valid, and no caller should be able to read the name and think otherwise.
+/// Two contextual transaction rules still need state this component cannot see: that an
+/// input's outpoint exists and is unspent, and that a coinbase output has matured. Both
+/// are lookups into the UTXO set, which is the next component; `CheckSpendAuthorisation`
+/// below takes the outputs being spent as a parameter precisely so that the cryptography
+/// does not have to wait for the database.
+///
+/// That is why `CheckBlock` is explicit that it is the context-free half: a block that
+/// passes it is not yet valid, and no caller should be able to read the name and think
+/// otherwise.
 
 #include <amarian/consensus/params.hpp>
 #include <amarian/primitives/block.hpp>
@@ -86,6 +89,19 @@ enum class ValidationError : uint16_t {
     ConditionThresholdAboveKeyCount,  ///< Unsatisfiable, and so a lock nobody can open.
     WitnessSignatureCountMismatch,    ///< Not exactly `threshold` signatures.
     WitnessSignatureSchemeReserved,
+    ConditionKeyWrongSize,      ///< A known scheme with a key of the wrong length.
+    WitnessSignatureWrongSize,  ///< A known scheme with a signature of the wrong length.
+
+    // --- Spend authorisation: the inputs against the outputs they spend -----------
+    TxCoinbaseAuthorisesNothing,  ///< A coinbase spends nothing, so it has no fee and no
+                                  ///< input to authorise. Its reward is bounded instead
+                                  ///< by `CheckCoinbaseAmount`.
+    TxSpentOutputCountMismatch,   ///< Not exactly one spent output per input.
+    TxSpendsUnspendableOutput,    ///< Lock version 0, which no witness can satisfy.
+    TxConditionDoesNotMatchLock,  ///< The revealed condition is not the one committed to.
+    TxSignatureDoesNotVerify,     ///< No remaining key in the condition verifies it.
+    TxInputSumOutOfRange,         ///< The spent amounts sum outside `[0, MAX_MONEY]`.
+    TxOutputsExceedInputs,        ///< Spends more than it takes in, which would mint coins.
 
     // --- Block ---------------------------------------------------------------------
     BlockNoTransactions,
@@ -128,6 +144,13 @@ using Verdict = std::expected<void, ValidationError>;
 /// that is non-empty, bounded, strictly ascending, and free of the reserved scheme, and
 /// a threshold that at least one key set can satisfy.
 ///
+/// A key under a scheme this build *knows* must also be exactly that scheme's length.
+/// The check belongs here, in the cheap context-free pass, rather than at verification
+/// time: a wrong-length key can be rejected by comparing two integers, and doing it here
+/// means an attacker cannot make a node reach the cryptography with a key that could
+/// never have parsed. A key under an unknown scheme has no length this build can check
+/// and is left alone.
+///
 /// An *unknown* `condition_version` passes: like an unknown lock version, it must stay
 /// valid-and-spendable so a future condition form can be deployed by soft fork without
 /// splitting old nodes off the chain. Version 0 is not unknown — it is reserved, and it
@@ -136,7 +159,8 @@ using Verdict = std::expected<void, ValidationError>;
                                           const ChainParams& params);
 
 /// The structural rules on one witness: its condition is well-formed, and it carries
-/// exactly `threshold` signatures, none under the reserved scheme.
+/// exactly `threshold` signatures, none under the reserved scheme, each of its own
+/// scheme's length where this build knows that scheme.
 ///
 /// Exactly, not at least: a witness with spare signatures is a witness with spare
 /// bytes, and bytes that consensus ignores are bytes an attacker can vary to change a
@@ -151,6 +175,80 @@ using Verdict = std::expected<void, ValidationError>;
 /// version, or an unknown key scheme. Each is an extension point, and rejecting an
 /// unrecognised value at any of them turns every future upgrade into a hard fork.
 [[nodiscard]] Verdict CheckTransaction(const Transaction& tx, const ChainParams& params);
+
+// --- Spend authorisation ---------------------------------------------------------
+//
+// The rules that need the outputs being spent, and nothing else. They are separated from
+// the ones that need the whole UTXO set on purpose: *finding* `spent_outputs` is lookup,
+// and deciding whether they may be spent is arithmetic and cryptography. Splitting them
+// means the expensive half is a pure function of values, which is what lets it be tested
+// exhaustively without a database and, later, run on several threads without a lock.
+
+/// A value, or the one rule that rejected the input. The `Verdict` of a rule that has
+/// something to say when it succeeds.
+template <typename T>
+using Computed = std::expected<T, ValidationError>;
+
+/// The fee a transaction pays: the sum of what it spends minus the sum of what it pays
+/// out, rejecting any transaction that would mint coins.
+///
+/// The supply guarantee has exactly two halves and this is one of them. No transaction
+/// may create value, and the one that is allowed to — the coinbase — is bounded instead
+/// by `CheckCoinbaseAmount`, which is handed the total of the fees this function returns.
+/// Between them there is no path by which a facet comes into existence unscheduled.
+///
+/// A coinbase spends nothing and pays no fee, so it is rejected here rather than given a
+/// special case: callers sum this over the non-coinbase transactions of a block.
+[[nodiscard]] Computed<int64_t> TransactionFee(const Transaction& tx,
+                                               std::span<const TxOutput> spent_outputs);
+
+/// Whether each input is actually authorised to spend the output it names: the revealed
+/// condition is the one that output committed to, and the signatures satisfy it.
+///
+/// `spent_outputs[i]` is the output that `tx.inputs[i]` spends; the count is checked
+/// rather than assumed, because a caller that got it wrong would otherwise read past the
+/// end of the span. Whether each of those outputs *exists* and is unspent is the UTXO
+/// set's answer and is not asked here.
+///
+/// Assumes `CheckTransaction` has passed, so the witness count matches the input count
+/// and every witness is structurally sound. Rejects a coinbase, which authorises nothing.
+///
+/// The three extension points keep their meaning under a soft fork:
+///
+///  - An **unknown lock version** is spendable by any witness, without a signature check.
+///    Its rules do not exist yet, so there is nothing for this build to enforce; a node
+///    that rejected it would fork itself off the chain the moment the rules were defined.
+///  - An **unknown key scheme** counts as satisfied. An old node cannot check a signature
+///    under a scheme it has never heard of, and the alternative — calling it a forgery —
+///    is the same self-fork. What keeps this safe is that upgraded nodes do check it, and
+///    a majority of hashpower enforcing the new rule is what a soft fork *is*.
+///  - **Version 0**, at either point, is reserved and always rejected.
+///
+/// Signatures satisfy a threshold by **ordered forward match**: one key index advances
+/// monotonically across the whole signature list, so signature *i* is checked against
+/// keys from wherever signature *i−1* stopped. Two properties follow, and both are the
+/// reason for choosing it over trying every pair.
+///
+/// The first is cost. At most `keys.size()` verifications happen no matter how many
+/// signatures are offered, so the work an input can demand is bounded by the condition
+/// its own commitment named — and since a threshold condition is capped at
+/// `MAX_SPEND_CONDITION_KEYS`, so is the work. Trying every pair would be quadratic in a
+/// value the spender chooses, which is a denial-of-service vector paid for at linear
+/// weight.
+///
+/// The second is malleability. Exactly one ordering of a given set of signatures
+/// verifies: the ascending one. Any permutation of a valid witness is an invalid witness,
+/// so a relayer cannot reorder signatures to produce a second wtxid for one transaction.
+///
+/// A key the implementation cannot parse — right length for its scheme, but not a valid
+/// point or encoding — is skipped like one whose signature simply failed, not treated as
+/// a fatal defect. The condition's keys were fixed when the coin was created, and
+/// rejecting outright would make an *n*-key condition unspendable because of one bad key
+/// that could never have verified anything anyway. Skipping leaves it spendable by the
+/// keys that do work, which is what its owner asked for.
+[[nodiscard]] Verdict CheckSpendAuthorisation(const Transaction& tx,
+                                              std::span<const TxOutput> spent_outputs,
+                                              const ChainParams& params);
 
 // --- Headers ---------------------------------------------------------------------
 

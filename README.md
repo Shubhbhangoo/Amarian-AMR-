@@ -14,30 +14,42 @@ advice.
 
 ## Status
 
-Amarian is in **Phase 0 of 13** — environment, build system, and project
-foundations. There is no chain yet.
+Phase 0 of 13 is complete. Amarian is part way through **Phase 1** — the
+minimal blockchain. The data types, hashing, signature verification and the
+context-free consensus rules exist and are tested. There is no chain state yet,
+so there is still no chain.
 
-What actually works today, verified by the test suite:
+What actually works today, verified by 202 passing tests across five presets:
 
 | Component | State |
 |---|---|
-| Hardened C++23 build (GCC 15 / Clang 21, CMake + Ninja) | working |
-| Sanitizer, fuzzing and release presets | working |
-| `util`: byte/hash types, strict hex codec, checked arithmetic, logging, CLI options | working |
-| `amariand --version` / `--build-info` / `--help` | working |
-| Consensus rules, blocks, transactions, UTXO set | **not started** (Phase 1) |
+| Hardened C++23 build (GCC 15 / Clang 21, CMake + Ninja), nine presets | working |
+| `util`: byte/hash types, strict hex codec, canonical serialisation codec, checked arithmetic, logging, CLI options | working |
+| `crypto`: SHA-256, double SHA-256, tagged hashing; signature scheme registry; verification | working |
+| `primitives`: amounts, outpoints, spend conditions, locks, witnesses, transactions, blocks, Merkle tree, signature hash | working |
+| `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation | working |
+| `amariand --version` / `--build-info` / `--help`, chain identity and backend startup gates | working |
+| UTXO set, block index, chain selection, persistence | **in progress** (Phase 1) |
 | Mining and difficulty adjustment | **not started** (Phase 3) |
 | P2P networking | **not started** (Phase 4) |
 | Wallet | **not started** (Phase 5) |
-| Post-quantum signatures | **not started** (Phase 6) |
+| Post-quantum signatures | **verifiable in consensus**, not yet spendable — no wallet, address format or migration path (Phase 6) |
 
-`amariand` currently exits non-zero and says so, rather than pretending to
-start a node. See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the
-current task, the next task, and open risks.
+That last row is worth reading precisely. ML-DSA-44 and SLH-DSA-SHA2-128s
+verify today through the same code path as BIP-340 Schnorr, and a transaction
+authorised by a real ML-DSA-44 signature passes consensus in the test suite.
+Nothing yet *creates* such an output, so the schemes are implemented but not
+usable. See [docs/PQ_CRYPTO.md](docs/PQ_CRYPTO.md#what-is-built-and-what-is-not).
+
+`amariand` still exits non-zero and says why, rather than pretending to start a
+node: block storage and the network layer are the remainder of Phase 1. See
+[DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the current task, the next
+task, and open risks.
 
 Claims this project does **not** make yet, and will not make until there is
 evidence: that it is decentralised, that it is post-quantum secure, or that any
-performance number has been measured.
+performance number outside [docs/PQ_CRYPTO.md](docs/PQ_CRYPTO.md) has been
+measured.
 
 ## Design goals
 
