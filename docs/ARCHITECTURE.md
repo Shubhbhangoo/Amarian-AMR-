@@ -176,14 +176,21 @@ different ids. This is why JSON is confined to RPC.
 | Directory | Label | Runs |
 |---|---|---|
 | `tests/unit/` | `unit` | Fast, no I/O. Every commit. |
-| `tests/consensus/` | `consensus` | Rule-by-rule, including vectors that must be rejected. Gates a release on its own via `ctest -L consensus`. |
-| `tests/integration/` | `integration` | Multiple nodes, real sockets, real disk. Empty today: the one multi-node check that exists, the Phase 1 acceptance criterion, is a shell script driving two real `amariand` processes — [scripts/phase1_acceptance.sh](../scripts/phase1_acceptance.sh) — run deliberately rather than on every build, because it costs two RocksDB directories and a mining run. It moves here when there are sockets to test and the setup is worth a fixture. |
+| `tests/consensus/` | `consensus` | Attempts to break the supply cap, each of which must fail. |
+| — | `integration` | Multiple nodes, real sockets, real disk. Not built yet: the one multi-node check that exists, the Phase 1 acceptance criterion, is a shell script driving two real `amariand` processes — [scripts/phase1_acceptance.sh](../scripts/phase1_acceptance.sh) — run deliberately rather than on every build, because it costs two RocksDB directories and a mining run. It becomes a tier when there are sockets to test and the setup is worth a fixture. |
 | `fuzz/` | — | One libFuzzer harness per parser; see [fuzz/README.md](../fuzz/README.md). |
 | `bench/` | — | Built in the shipping configuration, so numbers describe what ships. |
 
 Consensus tests are labelled separately because "did I break a consensus rule" is
 a different question from "did I break the build", and it should be answerable in
 one command without waiting for anything slow.
+
+The label is not the directory. `ctest -L consensus` gates a release on its own,
+and to mean anything it has to run the rules as well as the attacks on them — so
+`test_consensus`, `test_utxo` and `test_chain` carry both labels despite living in
+`tests/unit/`. Those are the three layers where a bug is a chain split. A gate that
+ran the adversarial cases while skipping the rules they are adversarial about would
+be worse than no gate at all.
 
 Fuzz harnesses assert correctness properties, not only memory safety. A parser can
 be perfectly memory-safe and still accept a transaction it should reject, and only

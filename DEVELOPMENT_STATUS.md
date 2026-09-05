@@ -4,7 +4,7 @@ Living record of where the project actually is. Updated as work lands, not as
 work is planned. Anything not listed as done is not done.
 
 **Last updated:** 2026-09-05
-**Current phase:** Phase 2 — Hard-cap monetary system
+**Current phase:** Phase 3 — Mining and difficulty
 **Phase 0 status:** complete
 **Phase 1 status:** complete. The acceptance criterion is met: two independently launched
 nodes, with separate data directories, reach the same tip when one mines a chain and hands
@@ -17,7 +17,9 @@ hash, spend authorisation, the two contextual transaction rules that need chain 
 unspent output set with atomic application and reversal, the header tree with accumulated
 work and the best-tip rule, activation over the coins set, the RocksDB chainstate, block
 assembly with a bounded nonce search, and a node that ties all of it together.
-**Phase 2 status:** not started.
+**Phase 2 status:** complete. The acceptance criterion is met: seven named inflation attacks are
+each rejected by production rules that were already in place, so the phase added the attacks and
+the tier to run them in rather than new consensus code. Detail under Phase 2 acceptance criteria.
 
 ---
 
@@ -71,6 +73,58 @@ The components, all landed:
 Difficulty *retargeting* is deliberately not on this list: Phase 1 uses a constant
 target, and the retarget algorithm arrives in Phase 3 where it can be evaluated
 against simulated hashrate rather than asserted.
+
+## Phase 2 acceptance criteria
+
+Acceptance is one criterion and it is **met**: **invalid inflation attempts are rejected**,
+demonstrated by named attacks rather than argued from the schedule. The evidence is
+[tests/consensus/supply_test.cpp](tests/consensus/supply_test.cpp) — seven attempts to create
+money, every one of which fails, run by `ctest -L consensus`.
+
+The enforcement was already in production code when the phase opened, which is why the phase
+added no consensus rules. `ConnectBlock` sums each transaction's fee from the coins it actually
+spent and hands the total to `CheckCoinbaseAmount`, so the ceiling on a coinbase is computed
+per block from the height and the fees, with no running supply total that could be corrupted or
+argued with. `MAX_MONEY` is not a constant somebody typed: `static_assert(TotalIssuance(
+MAINNET_ISSUANCE) == MAX_MONEY)` sums the schedule at compile time, so a change to the era
+length or the decay that would alter the cap fails the build rather than the tests.
+
+| Attack | Rejected by | Named attack |
+|---|---|---|
+| Coinbase claims fees no transaction paid | `CheckCoinbaseAmount`, ceiling = reward + actual fees | `ACoinbaseCannotClaimFeesNoTransactionPaid` |
+| The excess split across several outputs, so no single output looks wrong | the same rule, applied to the sum | the second half of that test |
+| The same coin spent twice in one block, across two transactions | `CoinsCache::SpendCoin` — the first spend removes it | `TheSameOutpointCannotBeSpentTwiceInOneBlock` |
+| The same coin spent twice inside one transaction | the same, on consecutive inputs | the second half of that test |
+| A coin an earlier block already spent | the coins set is the record of what exists | `ACoinSpentByAnEarlierBlockCannotBeSpentAgain` |
+| A coinbase output sum engineered to wrap back into the money range | `TryAccumulate` in `CheckCoinbaseAmount`, before any range check | `ACoinbaseOutputSumEngineeredToWrapIsRejectedByTheAccumulation` |
+| A block fee total engineered to wrap back into the money range | `TryAccumulate` in `ConnectBlock`, before the total reaches the ceiling rule | `ABlockFeeTotalEngineeredToWrapIsRejectedByTheAccumulation` |
+| A coinbase paying itself after issuance ends | `BlockReward` returns 0, so the ceiling is the fees alone | `OnceIssuanceEndsACoinbaseMayClaimFeesAndNothingElse` |
+| — and the other half: a fee after issuance ends is still payable, exactly | the same rule, from the other side | `AFeeAfterIssuanceEndsRaisesTheCeilingByExactlyThatFee` |
+
+The two wrap attacks are the ones worth reading. Both use 220 outputs of `MAX_MONEY`, a count
+that was computed rather than chosen: 220 × `MAX_MONEY` exceeds 2^64 and lands back on
+33,255,911,367,848,384, which is *below* `MAX_MONEY` and therefore a perfectly valid amount. A
+rule that summed first and range-checked afterwards would see nothing wrong with 220 times the
+entire money supply. The premise is a `static_assert` in unsigned arithmetic inside the test, so
+the compiler checks the arithmetic the attack depends on instead of a comment asserting it.
+
+The fee-total case is the sharper of the two: remove the accumulation guard and
+`CheckCoinbaseAmount`'s own `IsValidAmount(total_fees)` accepts the wrapped figure, because the
+wrapped figure *is* a valid amount. The output-sum case is honest defence in depth — the ceiling
+would also catch it, but only when the wrapped value happens to exceed the permitted reward, and
+"happens to" is not a consensus rule.
+
+This is the one place where the standing instruction to stop adding tests does not apply,
+because here the tests *are* the deliverable: a hard cap nobody has attacked is a claim, not a
+property.
+
+Two things the phase changed outside the tests. The `consensus` tier now exists as a directory,
+where [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) had described one that did not; and the
+`consensus` label now selects 95 tests rather than 7, because `test_consensus`, `test_utxo` and
+`test_chain` carry both labels. A release gate that ran the attacks while skipping the rules they
+attack would be worse than no gate. Getting that second label to take effect needed an escaped
+list separator in `tests/CMakeLists.txt` and the deletion of the `*_tests.cmake` discovery caches
+under `build/`; both are commented where they matter.
 
 ## Completed
 
@@ -435,7 +489,7 @@ against simulated hashrate rather than asserted.
   one states what is implemented and what is design intent, because a document
   that reads as a specification of working software when the software does not
   exist is the most expensive kind of wrong.
-- [docs/DECISIONS.md](docs/DECISIONS.md) records 76 decisions with the evidence
+- [docs/DECISIONS.md](docs/DECISIONS.md) records 77 decisions with the evidence
   behind each and the condition that would reverse it.
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) enumerates attack classes with a
   per-class *Tested* column. Thirty-two individual rows read **yes** and thirteen
@@ -466,34 +520,28 @@ against simulated hashrate rather than asserted.
 
 ## Current task
 
-Phase 2 — the hard-cap monetary system, whose acceptance criterion is that invalid inflation
-attempts are **rejected**, demonstrated rather than argued. The two halves that have to meet
-already have: `ConnectBlock` sums each transaction's fee from the coins it actually spent and
-hands the total to `CheckCoinbaseAmount`, so the cap is enforced per block from height with no
-running total to trust, and `MAX_MONEY` is a `static_assert` that sums the schedule at compile
-time.
+Phase 3 — mining and difficulty. This is the first genuinely new consensus rule since Phase 1.
+Today a child inherits its predecessor's target clamped to the network floor: complete and final
+for regtest, and not an algorithm anywhere else. `NextTargetBits` is the seam it goes behind.
 
-So the code is largely in place and the work is adversarial rather than constructive: build the
-inflation attempts and confirm each is refused for the right reason. A coinbase paying more than
-`BlockReward(height)`; a coinbase claiming fees no input paid; a transaction whose outputs exceed
-its inputs; a spend of a coin that does not exist; a spend of the same coin twice, in one block
-and across two; a coinbase spent before maturity; an issuance claim at a height past 18 795 000,
-where the reward is zero and any coinbase output at all is a mint. These are the rows
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) marks Critical in the supply class, and the phase's
-criterion is that each one has a test that fails when the defence is removed — which is stronger
-than the **yes** those rows currently claim.
+Three things arrive together, because each is unusable without the others. A **retarget
+algorithm** — ASERT is the current intent, and the phase's own criterion is that the choice rests
+on simulated hashrate rather than on the paper that proposed it, including the oscillation attack
+a small chain actually invites. A **mempool**, which is what makes a block contain anything but
+its coinbase, and with it fee-rate selection under `MAX_BLOCK_WEIGHT` and the replacement and
+eviction policy that a fee market needs. A **mining RPC**, so `BuildBlockTemplate` and
+`SolveHeader` are reachable by something other than `--generate`.
 
-This is the one place where the standing instruction to stop adding tests does not apply, because
-here the tests *are* the deliverable: a hard cap nobody has attacked is a claim, not a property.
+The order matters: retargeting first, because it is a consensus rule and everything else is
+policy, and a policy bug costs a block while a consensus bug costs the chain.
 
 ## Next task
 
-Phase 3 — mining and difficulty. Difficulty retargeting is the first genuinely new consensus rule
-since Phase 1: today a child inherits its predecessor's target clamped to the network floor,
-which is complete and final for regtest but not a real algorithm. It is deliberately deferred to
-a phase where it can be evaluated against simulated hashrate rather than asserted, and the
-mempool — and with it fee selection, a block containing anything but its coinbase, and a mining
-RPC — arrives with it.
+Phase 4 — peer-to-peer networking, and the first phase where the two nodes that already agree on
+a chain do so over a socket instead of a file. The framing, the handshake and the header-first
+sync are specified in [docs/NETWORK.md](docs/NETWORK.md) and implemented by nothing yet; the
+`storage` and `chain` layers were built for it, which is why `ChainState` takes a `ChainSink` and
+`AcceptBlock` is separate from activation.
 
 ## Blockers
 
@@ -515,31 +563,39 @@ None.
 
 Recorded from actual runs, 2026-09-05, 12 × 2.5 GHz x86-64.
 
-Full preset matrix. The five test presets were re-run after the node wiring landed, by
-[scripts/test_matrix.sh](scripts/test_matrix.sh); the four build-only rows are from the last
-full [scripts/preset_matrix_check.sh](scripts/preset_matrix_check.sh) run, which is also what
-counts `warning:` lines across all nine.
+Full preset matrix, re-run in full after the `consensus` tier landed, by
+[scripts/refresh_and_check_matrix.sh](scripts/refresh_and_check_matrix.sh) — which clears each
+preset's `*_tests.cmake` discovery caches before handing over to
+[scripts/preset_matrix_check.sh](scripts/preset_matrix_check.sh), because a newly added test
+target is otherwise invisible to a preset that was configured before it existed. Every row below
+is from that one run, including the warning counts.
 
 | preset | compiler | configuration | result |
 |---|---|---|---|
-| `dev` | GCC 15.2.0 | RelWithDebInfo | 246/246 passed |
-| `debug` | GCC 15.2.0 | `-O0 -g` | 246/246 passed |
-| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 246/246 passed |
-| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 246/246 passed |
-| `tsan` | Clang 21.1.8 | TSan | 246/246 passed |
+| `dev` | GCC 15.2.0 | RelWithDebInfo | 253/253 passed |
+| `debug` | GCC 15.2.0 | `-O0 -g` | 253/253 passed |
+| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 253/253 passed |
+| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 253/253 passed |
+| `tsan` | Clang 21.1.8 | TSan | 253/253 passed |
 | `release` | GCC 15.2.0 | Release | builds |
 | `bench` / `bench-clang` | GCC / Clang | Release + hardening | build |
 | `fuzz` | Clang 21.1.8 | libFuzzer + ASan/UBSan | all six executables build |
 
-Zero compiler warnings on every one of the nine, with `-Werror` on. Reproduced by
-[scripts/preset_matrix_check.sh](scripts/preset_matrix_check.sh), which builds each
-preset, counts `warning:` lines and reports the pass line, so the table above is a
-transcript rather than a recollection.
+Zero compiler warnings on every one of the nine, with `-Werror` on.
 
-The 246 are 72 `test_util`, 66 `test_primitives`, 52 `test_consensus`, 19 `test_utxo`,
-17 `test_chain`, 15 `test_crypto` and 5 `test_version`, counted with
+The `asan` row carries more than usual weight now. Two of the new supply tests are built around
+an addition engineered to wrap, so a passing run under UBSan with integer findings fatal is
+positive evidence that the production arithmetic *detects* the overflow rather than performing it
+— `TryAccumulate` and `CheckedAdd` refuse before the wrap happens, and the wrap the tests reason
+about stays inside their own `static_assert`, in unsigned arithmetic, where it is defined.
+
+The 253 are 72 `test_util`, 66 `test_primitives`, 52 `test_consensus`, 19 `test_utxo`,
+17 `test_chain`, 15 `test_crypto`, 7 `test_supply` and 5 `test_version`, counted with
 `--gtest_list_tests` by [scripts/count_tests.sh](scripts/count_tests.sh) rather than
 estimated.
+
+By tier: `ctest -L unit` selects 246 and `ctest -L consensus` selects 95, which overlap by 88 —
+`test_consensus`, `test_utxo` and `test_chain` carry both labels, for the reason in decision 77.
 
 Genesis, verified end to end rather than asserted: `amarian-genesis --check` reports
 `check ok` for mainnet, testnet and regtest — each block 257 bytes, weight 812 — and

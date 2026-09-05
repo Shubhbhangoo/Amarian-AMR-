@@ -1748,6 +1748,37 @@ is a parameter and not a format.
 **Reversed if:** a defect is found in an encoding that cannot be worked around by a versioned
 extension. That is a hard fork, and it would be recorded here as one.
 
+### 77. The release gate is a label, not a directory, and it includes the rules as well as the attacks
+
+**Implemented, 2026-09-05**, as the `"unit;consensus"` label on `test_consensus`, `test_utxo` and
+`test_chain` in [../tests/unit/CMakeLists.txt](../tests/unit/CMakeLists.txt), alongside the
+`consensus`-only label on the new `tests/consensus/` tier.
+
+`ctest -L consensus` is meant to answer one question — did I break a consensus rule — without
+waiting for anything slow. The obvious arrangement is one label per directory, and it was
+rejected: the attacks on the supply cap live in `tests/consensus/`, but the rules they attack are
+tested in `tests/unit/`, and a gate that ran the adversarial cases while skipping the rules they
+are adversarial about would be worse than no gate at all. It would report green for a build in
+which `CheckCoinbaseAmount` had been deleted, because the attacks would still be refused — by
+whatever the deletion left behind.
+
+So the label follows the question rather than the filesystem. Three suites carry both: consensus,
+utxo and chain, the layers where a bug is a chain split. Not primitives, util or crypto — a
+canonical-encoding bug is just as fatal, but a gate that covers every layer is a gate that says
+nothing about which question it answered, and those layers are what `ctest -L unit` is for.
+
+**Consequence:** the gate is 95 tests rather than the 7 the directory holds, and a new suite has
+to decide which question it answers rather than inheriting an answer from its path. Two mechanical
+traps come with it, both commented where they bite: `gtest_discover_tests` writes PROPERTIES
+straight into a generated `set_tests_properties` call, so an unescaped `unit;consensus` arrives as
+two arguments and the second label is silently dropped; and under `DISCOVERY_MODE PRE_TEST` the
+discovered test list is cached per target in a `*_tests.cmake` that a PROPERTIES change does not
+invalidate, so a corrected label reads as having changed nothing until the cache is deleted. Both
+failures are silent and both look like the label having no effect.
+
+**Reversed if:** the tiers stop being able to disagree — if every suite ends up carrying every
+label, the label has stopped selecting and the directories should just be run directly.
+
 ## Still open
 
 | Question | Decided in |
