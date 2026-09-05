@@ -74,6 +74,15 @@ amarian_add_test(test_mining unit
 )
 target_link_libraries(test_mining PRIVATE amarian::mining)
 
+# `unit` for the same reason, and with one more: the RPC surface is what an operator asks
+# this node to do, and a node that mishandles a request has mishandled its own operator. It
+# links only amarian::rpc — the chain, mempool and mining it needs arrive through that
+# target's PUBLIC edges, which is the layering claim being exercised as much as the methods.
+amarian_add_test(test_rpc unit
+    rpc_test.cpp
+)
+target_link_libraries(test_rpc PRIVATE amarian::rpc)
+
 amarian_add_test(test_version unit
     version_test.cpp
 )

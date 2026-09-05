@@ -140,6 +140,29 @@ target_link_libraries(amarian_storage
 )
 add_library(amarian::storage ALIAS amarian_storage)
 
+# --- rpc: the operations a client can ask a node to perform -------------------
+# The typed half of the JSON-RPC surface, and nothing else: no socket, no port, no
+# thread, no authentication. That split is the point. `submitblock` must run a submitted
+# block through exactly the validation an arriving block gets, and `getblocktemplate`
+# must describe exactly the block this node would mine — both are properties of function
+# calls, and keeping them in a target with no transport in it is what lets them be
+# exercised as function calls. The listener is where binding, authentication and request
+# framing live, and it is a different target for the same reason: a bug in either half
+# should not need the other half to be understood.
+#
+# amarian::json is PUBLIC because the method results *are* `nlohmann::json` values, so a
+# caller cannot use this header without it. That is only tolerable here: rpc is a top
+# layer, nothing below it links rpc, and so no JSON type can reach the code that decides
+# whether a block is valid. The dependency file says the same thing from the other side —
+# "JSON-RPC serialisation only (never consensus)".
+add_library(amarian_rpc STATIC
+    rpc/dispatch.cpp
+)
+target_link_libraries(amarian_rpc
+    PUBLIC amarian::chain amarian::mining amarian::mempool amarian::json
+)
+add_library(amarian::rpc ALIAS amarian_rpc)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
