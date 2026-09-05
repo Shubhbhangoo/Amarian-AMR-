@@ -34,6 +34,7 @@ amarian_add_test(test_consensus unit
     consensus_params_test.cpp
     consensus_target_test.cpp
     consensus_validation_test.cpp
+    consensus_work_test.cpp
 )
 # OpenSSL for the same reason test_crypto links it, and only for that reason: the spend
 # authorisation rules cannot be tested against anything but real signatures, and the node
