@@ -667,6 +667,89 @@ stops nodes connecting; `chain_id` stops a signature itself from being valid
 elsewhere, which is the protection that still holds when someone deliberately
 bridges two networks.
 
+## Chain selection
+
+Every rule above decides whether a block *may* be valid. Selection decides which of the
+valid ones a node actually follows, and it is a different kind of statement: a rule is a
+pure function of a block, while selection is a fact about a set of blocks that arrived
+over time.
+
+**The best chain is the one with the most accumulated proof of work; among branches with
+equal work, the one this node learned of first.**
+
+Work is summed, not counted, and not compared as targets. The work a header at target
+*t* represents is
+
+```
+work(t) = floor(2^256 / (t + 1))
+```
+
+which is the expected number of attempts needed to find it: *t* + 1 of the 2^256 possible
+digests satisfy the target, so a uniform digest satisfies it with probability
+(*t* + 1) / 2^256. The floor is part of the rule — this is an integer every node must
+compute identically, and a rounded comparison is a way for two honest nodes to disagree
+about a tip.
+
+Counting blocks instead would let an attacker mine many trivial ones. Comparing targets
+instead would order branches backwards: two easy blocks can represent more hashing than
+one hard block, and only the summed form says so.
+
+**Ties go to the header seen first.** A deterministic tie-break — lowest hash, say — would
+let every node agree instantly rather than disagreeing until the next block, and is
+nonetheless the wrong rule, because it makes block withholding free. A miner holding a
+low-hash block could let a rival win the height and publish later to displace them at no
+cost, which turns a one-confirmation payment into something reversible for free.
+First-seen makes withholding lose. The brief disagreement it permits is resolved by the
+next block either way.
+
+First-seen is node-local, is recorded as the order headers were offered rather than read
+from a clock, and is never transmitted. It is not consensus data: two nodes that saw the
+same two headers in opposite orders are both correct.
+
+A branch is only a candidate while nothing in it has been rejected. Rejection is
+inherited downwards and permanently — no descendant of an invalid block can be connected,
+whatever its own header says — while validity is not inherited at all.
+
+**Headers are indexed; bodies are not required to index one.** A header is 92 bytes and
+carries everything selection needs: its predecessor, its height, and the work it claims.
+So a node can learn the shape of every branch, and how much work each one has, before
+deciding which bodies are worth requesting. How far a block has been validated —
+header only, body checked, or fully connected to the unspent output set — is recorded
+separately from the header itself, because a sound header can front a forged block.
+
+A **rejected header is not remembered.** That is required rather than an optimisation:
+the future-timestamp rule is a verdict that expires, so a node caching it would
+permanently refuse a block the rest of the network went on to accept.
+
+Moving between tips is planned before anything is written: the walk finds the deepest
+block the two branches share, and produces the list to revert (tip first) and the list to
+apply (lowest height first). The cost is the depth of the fork, not the length of the
+chain, and the plan can be inspected and bounded before the unspent output set is
+touched.
+
+### Carrying the plan out
+
+**A node never moves to a tip it cannot reach.** Selection ranks branches by the work their
+headers claim, and a header is cheap while a body is not, so a peer can announce a heavier
+branch it never intends to send. Before a switch begins, the target is truncated to the
+highest block on the new branch whose entire path from the fork point is available, and the
+switch is abandoned unless that truncated target still wins under the selection rule. Since
+every block contributes at least one unit of work, an ancestor always has strictly less
+total work than its descendant — so this is not a heuristic that usually holds. No pattern
+of announced-but-withheld bodies can move a node's tip backwards.
+
+**Every intermediate state is a valid chain.** Application and reversal are atomic per
+block, not per switch: a node interrupted part way through a reorganisation is on a shorter
+chain, never on a corrupt set. This is why a switch of a thousand blocks needs no
+thousand-block staging buffer, and why an interrupted initial sync resumes rather than
+restarts.
+
+**A block that fails while being applied is rejected permanently, and its branch with it.**
+That is sound because a block's ancestry is fixed by its `prev_block`: there is exactly one
+unspent output set it could ever be applied against, so failing once is failing on the only
+chain it could have belonged to. A block whose *body has not arrived* is a different matter
+and is never rejected — the node simply stops there and waits.
+
 ## Genesis
 
 Genesis is a chain parameter, and it is stored as a builder plus a recorded hash
@@ -774,11 +857,17 @@ outputs; and **the unspent output set** — the layered coins cache, the two con
 transaction rules that need chain state as `CheckTransactionInputs` (an input's outpoint
 exists and is unspent, and coinbase maturity), the duplicate-outpoint invariant, the pruning
 of provably unspendable outputs, and `ConnectBlock`/`DisconnectBlock` with the undo record
-and its encoding.
+and its encoding; and **the block index and chain selection** — accumulated work as a
+measured 256-bit quantity, the tree of known headers with each entry's validation state and
+failure inheritance, the most-work-then-first-seen selection rule, the context a header is
+judged against gathered from the chain, and the plan for moving from one tip to another.
 
-**Specified here but not yet implemented:** the block index and chain selection; persistence,
-so the set and the undo records survive a restart; the P2P protocol; the wallet; and
-difficulty retargeting, which is Phase 3 work and deliberately not attempted early.
+**Specified here but not yet implemented:** activating a selected chain, so that the plan
+above actually drives `ConnectBlock` and `DisconnectBlock` over the unspent output set;
+persistence, so the set, the blocks and the undo records survive a restart; the P2P
+protocol; the wallet; and difficulty retargeting, which is Phase 3 work and deliberately not
+attempted early — a child currently inherits its predecessor's target, clamped to the
+network floor, which is a complete rule and the final one for regtest.
 
 A block that passes `CheckBlock` is therefore **still not valid on its own**: `CheckBlock` is
 context-free and does not touch the UTXO set, because the coins being spent are not something
@@ -788,9 +877,12 @@ a block carries. Validity now means `CheckBlockHeader` and `ContextualCheckBlock
 function is named for the half it actually does, and nothing in the code is allowed to imply
 that any one of them alone is enough.
 
-What is still missing before a chain exists is not a rule but a *chain*: nothing yet decides
-which block to connect, so `ConnectBlock` applies a block to a set at a height the caller
-states. That decision is the block index, and it is next.
+A node now follows the chain it names. The index produces a `ChainSwitch` saying exactly what
+to revert and what to apply, and `ChainState::ActivateBestChain` carries it out, keeping the
+unspent output set in step with the tip at every block. So a chain exists rather than a tree of
+candidates — but only in memory. What remains of Phase 1 is durability and sharing: nothing is
+written to disk, and nothing is exchanged with another node, so the acceptance test for the
+phase — two nodes independently validating the same chain — has no second node to run against.
 
 
 Where this document and the code disagree, the code is what the network runs, and the

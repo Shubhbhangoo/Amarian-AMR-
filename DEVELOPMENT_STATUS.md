@@ -22,7 +22,7 @@ two-node acceptance test remain.
 | Criterion | State | Evidence |
 |---|---|---|
 | Clean build | met | Nine presets configure and build with no warnings and `-Werror` on; see the matrix under Test results |
-| Clean test command | met | `ctest --preset dev` — 47/47 when Phase 0 closed, 221/221 now, and the same count on `debug`, `clang-dev`, `asan`, `tsan` |
+| Clean test command | met | `ctest --preset dev` — 47/47 when Phase 0 closed, 246/246 now, and the same count on `debug`, `clang-dev`, `asan`, `tsan` |
 | Basic executable | met | `amariand --version`, `--build-info`, `--help` |
 | Basic project documentation | met | `README.md`, `SECURITY.md`, nine documents in `docs/`, `fuzz/README.md`, this file |
 
@@ -37,7 +37,7 @@ validate the same chain.** Progress towards it, by component:
 | Consensus hashing (`crypto/hash`) | landed — 4 tests against published vectors, independently recomputed |
 | Transaction primitives and Merkle root (`primitives/`) | landed — part of the 66 `test_primitives` tests |
 | Block header and block | landed — 92-byte header, weight from the encodings, height in the header |
-| Chain parameters, networks, compact target codec, PoW check | landed — part of the 44 `test_consensus` tests |
+| Chain parameters, networks, compact target codec, PoW check | landed — part of the 52 `test_consensus` tests |
 | Issuance schedule as a consensus rule | landed — `MAX_MONEY` is a `static_assert` computed from the schedule |
 | Genesis block, reward zero enforced as a rule | landed — three networks mined, recomputed and checked at node startup |
 | `consensus::ValidationError` — allocation-free, enum-reasoned | landed — 52 named rules, total `switch`, no `default` |
@@ -47,8 +47,11 @@ validate the same chain.** Progress towards it, by component:
 | Spend authorisation (lock commitment, threshold walk, fee) | landed — `CheckSpendAuthorisation` and `TransactionFee` over `std::span<const Coin>`, 16 tests against real ML-DSA-44 signatures |
 | Contextual transaction rules that need state (outpoint exists and unspent, maturity) | landed — `CheckTransactionInputs`, cheapest rule first and cryptography last |
 | UTXO set with apply and revert | landed — `amarian::utxo`: the layered coins cache, `ConnectBlock`/`DisconnectBlock`, the undo record and its encoding; 19 `test_utxo` tests |
-| Block index and chain selection | not started |
-| RocksDB chainstate persistence | not started |
+| Accumulated work as a comparable quantity | landed — `amarian::Work`, a 256-bit big-endian integer with saturating addition; 8 of the 52 `test_consensus` tests, including agreement with the published difficulty-one chainwork constant |
+| Block index and chain selection | landed — `amarian::chain::BlockIndex`: the header tree, work per branch, the best-tip rule with a first-seen tie-break, inherited rejection, and `PlanChainSwitch`; 17 `test_chain` tests over real mined regtest headers |
+| Applying a chain switch (`ActivateBestChain`) | landed — `amarian::chain::ChainState`: the active chain indexed by height, `AcceptBlock`, and an activation loop that reverses and applies blocks so the coins set follows the tip. Per-block atomicity, and a body-availability guard that makes a tip regression impossible rather than unlikely. Covered by the existing `test_chain` and `test_utxo` suites; a dedicated body-withholding test belongs with the P2P layer that can actually withhold |
+| Block and undo storage behind an interface | landed — `amarian::chain::BlockStore` with a complete in-memory implementation, so `chain` still links no database |
+| RocksDB chainstate persistence | not started — the next component: a `CoinsView`/`CoinsSink` and a `BlockStore` over storage |
 | Node wiring and the two-node integration test | not started |
 
 Difficulty *retargeting* is deliberately not on this list: Phase 1 uses a constant
@@ -346,10 +349,10 @@ against simulated hashrate rather than asserted.
   one states what is implemented and what is design intent, because a document
   that reads as a specification of working software when the software does not
   exist is the most expensive kind of wrong.
-- [docs/DECISIONS.md](docs/DECISIONS.md) records 38 decisions with the evidence
+- [docs/DECISIONS.md](docs/DECISIONS.md) records 63 decisions with the evidence
   behind each and the condition that would reverse it.
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) enumerates attack classes with a
-  per-class *Tested* column. Twenty-five individual rows now read **yes**; the
+  per-class *Tested* column. Thirty-eight individual rows now read **yes**; the
   spend-authorisation class went from "no verification" to fully implemented, and the
   supply class closed its last two open rows — the coinbase fee bound and the phantom
   fee claim — when the UTXO set landed, both on 2026-09-05. That column is the input to
@@ -430,11 +433,11 @@ Full preset matrix, re-run after the unspent output set landed:
 
 | preset | compiler | configuration | result |
 |---|---|---|---|
-| `dev` | GCC 15.2.0 | RelWithDebInfo | 221/221 passed |
-| `debug` | GCC 15.2.0 | `-O0 -g` | 221/221 passed |
-| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 221/221 passed |
-| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 221/221 passed |
-| `tsan` | Clang 21.1.8 | TSan | 221/221 passed |
+| `dev` | GCC 15.2.0 | RelWithDebInfo | 246/246 passed |
+| `debug` | GCC 15.2.0 | `-O0 -g` | 246/246 passed |
+| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 246/246 passed |
+| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 246/246 passed |
+| `tsan` | Clang 21.1.8 | TSan | 246/246 passed |
 | `release` | GCC 15.2.0 | Release | builds |
 | `bench` / `bench-clang` | GCC / Clang | Release + hardening | build |
 | `fuzz` | Clang 21.1.8 | libFuzzer + ASan/UBSan | all six executables build |
@@ -444,9 +447,10 @@ Zero compiler warnings on every one of the nine, with `-Werror` on. Reproduced b
 preset, counts `warning:` lines and reports the pass line, so the table above is a
 transcript rather than a recollection.
 
-The 221 are 72 `test_util`, 66 `test_primitives`, 44 `test_consensus`, 19 `test_utxo`,
-15 `test_crypto` and 5 `test_version`, counted with `--gtest_list_tests` by
-[scripts/count_tests.sh](scripts/count_tests.sh) rather than estimated.
+The 246 are 72 `test_util`, 66 `test_primitives`, 52 `test_consensus`, 19 `test_utxo`,
+17 `test_chain`, 15 `test_crypto` and 5 `test_version`, counted with
+`--gtest_list_tests` by [scripts/count_tests.sh](scripts/count_tests.sh) rather than
+estimated.
 
 Genesis, verified end to end rather than asserted: `amarian-genesis --check` reports
 `check ok` for mainnet, testnet and regtest — each block 257 bytes, weight 812 — and

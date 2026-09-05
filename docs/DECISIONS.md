@@ -1009,6 +1009,423 @@ distinctions exist for.
 
 
 
+## Chain
+
+### 48. Accumulated work is a measured quantity with its own type
+
+**Implemented, 2026-09-05**, in [include/amarian/consensus/work.hpp](../include/amarian/consensus/work.hpp).
+
+`Work` is a 256-bit amount supporting exactly three operations: construction from a target,
+addition, and comparison. It cannot be multiplied, cannot be converted to a floating-point
+number, and has no conversion to or from `Hash256` or `Target` even though all three are
+32-byte values. A `uint64_t` of "difficulty", or a shared 256-bit integer type, would have been
+less code.
+
+Three different 256-bit quantities appear within a few lines of each other in any
+proof-of-work implementation: the digest a miner found, the threshold it had to fall under, and
+the cost of finding it. They are not interchangeable — the first two are compared, the third is
+summed, and the second and third are inverses of one another. Confusing them is the classic way
+an implementation ends up disagreeing with every other node while still appearing to work,
+because a chain will still be selected; it will just be the wrong one. Separate types with no
+conversions between them make each of those confusions a compile error rather than a consensus
+split.
+
+Excluding multiplication and floating point is the same argument applied to the operations. A
+difficulty expressed as a `double` is the standard way to display work to a human, and it is
+also a value two nodes can compute differently. Nothing in consensus may see one, so the type
+cannot produce one.
+
+**Consequence:** displaying difficulty as a human-readable number is a job for the RPC layer,
+which may convert `ToHex` output however it likes. Consensus never does.
+
+**Reversed if:** never. This is a type distinction that costs nothing and forecloses a class of
+bug that is nearly invisible in testing.
+
+### 49. Work is stored most significant byte first, so comparison is correct by construction
+
+**Implemented, 2026-09-05**, in `Work`'s defaulted `==` and `<=>`.
+
+The 32 bytes are held big-endian, index 0 most significant, and both comparison operators are
+`= default`. Four little-endian `uint64_t` limbs would be the faster representation and the more
+usual one for arithmetic.
+
+Lexicographic order over big-endian bytes *is* numeric order, so a defaulted `<=>` over the
+array is the correct numeric comparison with no hand-written code to get wrong. Over
+least-significant-first limbs the same defaulted operator compares the *low* limb first and is
+silently, catastrophically wrong: it would order chains by the bottom 64 bits of their work.
+That comparison is the single most consequential operation in the node — it decides which chain
+is real — and this representation makes writing it impossible to get wrong rather than merely
+easy to get right. `Hash256` uses the identical technique for the identical reason.
+
+Arithmetic pays for it: addition and division work a byte at a time instead of a limb at a
+time. Both are performed once per header, against a `SHA-256` that costs far more.
+
+**Consequence:** `Work`'s byte order is the opposite of `Hash256`'s internal order, which is one
+more reason no conversion between them exists.
+
+**Reversed if:** profiling ever shows the byte-at-a-time division mattering. The fix would be
+limbs plus a hand-written comparison and a test that a chain differing only in its high limb
+compares correctly — not a defaulted operator.
+
+### 50. Work addition saturates rather than wrapping
+
+**Implemented, 2026-09-05**, in `Work::operator+=`.
+
+Overflow fills all 32 bytes rather than wrapping to zero. Neither behaviour is reachable: the
+total work of every chain that will ever exist is bounded by the number of hash attempts the
+physical universe permits, which is not close to 2^256.
+
+The choice is made on the asymmetry of the two failure modes if the unreachable is somehow
+reached. A wrap makes an enormous chain compare as a tiny one, so a node would abandon the real
+chain for a trivial one — the worst chain-selection bug there is. Saturation can at worst make
+two physically impossible chains compare equal, which the first-seen tie-break then resolves
+into a deterministic answer. Given a choice between an unreachable path that is catastrophic and
+an unreachable path that is merely arbitrary, the code takes the arbitrary one.
+
+**Consequence:** `Work` has no overflow signal. A caller cannot distinguish saturation from a
+genuine maximum, and does not need to.
+
+**Reversed if:** never.
+
+### 51. The work of a target is computed without a 512-bit intermediate
+
+**Implemented, 2026-09-05**, in `Work::OfTarget`.
+
+Work is `floor(2^256 / (t + 1))`, and 2^256 does not fit in 256 bits. Rather than widen every
+intermediate to 512 bits, the implementation uses
+
+    floor(2^256 / d) == floor((2^256 - 1 - t) / d) + 1     where d = t + 1
+
+The numerator on the right is the bitwise complement of `t`, which fits exactly. The identity
+holds because `(2^256 - 1 - t) + d == 2^256` exactly, so the true quotient is one more than the
+truncated one, and the `+ 1` cannot itself carry out of the top: `t >= 1` implies `d >= 2`, so
+the quotient is at most 2^255 - 1.
+
+The division is restoring binary long division with the divisor aligned under the dividend's
+highest set bit. That algorithm was chosen over quotient estimation for a property that can be
+stated in one sentence and checked by eye: every shifted divisor has at most as many bits as the
+dividend, so no intermediate in the loop can exceed 256 bits, so no intermediate can overflow.
+Estimation is faster and its overflow argument is a paragraph.
+
+**Consequence:** a zero target returns zero work rather than dividing by one. No digest is at
+most zero, so a zero target describes an impossible block, not an infinitely valuable one, and
+crediting a chain for it would be the wrong answer in the one direction that matters.
+`CompactToTarget` rejects the encoding long before this is reached; this is the second answer to
+the same question, and the two agree.
+
+**Reversed if:** a wider integer type enters the codebase for another reason and the identity
+stops paying for itself.
+
+### 52. Equal work goes to the header seen first, not to the lower hash
+
+**Implemented, 2026-09-05**, in `IsBetterTip` and `BlockIndexEntry::sequence`.
+
+When two branches have identical accumulated work, the tip stays with whichever header this node
+learned of first, recorded as a monotonic sequence number assigned in `AddHeader`. A
+deterministic tie-break — lowest hash, say — was considered and rejected.
+
+The deterministic rule looks strictly better: every node would agree on the winner instantly,
+instead of disagreeing until the next block resolves it. It is worse, because it makes block
+withholding free. A miner who finds a block whose hash happens to be low can sit on it, watch a
+rival win the height, and publish later to displace them at no cost — the withheld block wins the
+tie-break whenever it arrives. That turns a one-confirmation payment into something an attacker
+can reverse for free, which is a far worse property than a few seconds of honest disagreement.
+First-seen makes withholding lose: publish late and you lose the tie you would have won. The
+disagreement it permits is resolved by the next block either way.
+
+Recording it as a sequence number rather than a wall-clock time is what makes it testable. The
+index becomes a pure function of the order headers were offered to it, with no clock in the
+selection path, so a reorganisation test is reproducible and a node's tip does not depend on how
+its clock is set.
+
+**Consequence:** two honest nodes can briefly disagree about the tip at equal work. This is
+correct and is what Bitcoin does. Sequence numbers are node-local and never leave the node; they
+are not consensus data.
+
+**Reversed if:** never. This is the tie-break that makes withholding a losing strategy.
+
+### 53. A header's rejection carries either a rule verdict or an index reason, never a flat code
+
+**Implemented, 2026-09-05**, in `HeaderError`.
+
+`AddHeader` fails with `std::variant<consensus::ValidationError, IndexError>` rather than one
+enumeration covering both. `IndexError` has two values: the predecessor is not known, and the
+predecessor was rejected.
+
+The two halves demand opposite reactions from the caller. A `ValidationError` means the header
+can never be valid on this network, so whoever sent it is broken or hostile and should be scored
+accordingly. An `IndexError::UnknownPredecessor` means this node is not yet in a position to
+judge — headers arrive out of order constantly, and the sender did nothing wrong. Flattened into
+one enumeration, the natural implementation of peer scoring is a threshold on "how many headers
+did this peer send that I refused", and that implementation bans peers for being early. Keeping
+them in separate types means the wrong version does not compile.
+
+**Consequence:** a caller must destructure the variant. `Describe` is overloaded on both halves
+and on the variant itself, so logging needs no `std::visit` at the call site.
+
+**Reversed if:** never.
+
+### 54. A rejected header is not remembered
+
+**Implemented, 2026-09-05**, in `AddHeader`.
+
+A header that fails any check is not stored, so offering it again re-runs every check. Caching
+the rejection would be cheap and would stop a peer from making the node re-validate the same
+garbage repeatedly.
+
+It would also be a consensus bug, not merely an optimisation with a downside.
+`HeaderTimestampTooFarAhead` is a verdict that expires: a header more than
+`MAX_FUTURE_BLOCK_SECONDS` ahead of this node's clock is invalid now and valid in an hour. A node
+that recorded that rejection would permanently refuse a block the rest of the network accepted,
+and would then refuse every descendant of it — a permanent fork caused by nothing but its own
+cache. Since one rule's verdict expires, the safe design is to remember no verdict at all.
+
+**Consequence:** the cheapest check runs first. `CheckBlockHeader` — one hash and one comparison,
+no lookup, nothing allocated — gates everything else, so a flood of fabricated headers costs a
+hash each and never reaches the index.
+
+**Reversed if:** a rejection cache is genuinely needed for denial-of-service resistance. It would
+have to be keyed on verdicts that provably cannot expire, and the timestamp rules would have to
+be excluded by construction rather than by a comment.
+
+### 55. How far a block was validated and whether it is ruled out are two separate fields
+
+**Implemented, 2026-09-05**, in `BlockValidity` and `BlockFailure`.
+
+`BlockValidity` is a three-rung ladder — `Header`, `Body`, `Full` — declared in ascending order so
+that "never lower a recorded level" is a single `>` comparison. `BlockFailure` is a separate
+field with `None`, `Itself` and `Ancestor`. A single enumeration with a `Failed` value would have
+been smaller.
+
+Failure is not a rung on the validity ladder; it is the absence of the whole ladder, and it
+behaves differently. Validity is a fact about one block and is not inherited — a valid parent says
+nothing about its child. Failure *is* inherited, downwards and permanently: no descendant of a
+rejected block can ever be connected, however sound its own header. One field holding both would
+have to answer two questions with one value, and the natural mistakes follow immediately: a
+`Failed` enumerator that a monotonic "never go backwards" rule would refuse to record, or a
+recorded failure erased by a later validity report.
+
+`BlockFailure::Ancestor` is worth its own value rather than reusing `Itself`. A header that failed
+nothing itself is not evidence against whoever sent it, and a node that scored peers on inherited
+failures would punish them for relaying a chain that was fine when they saw it.
+
+**Consequence:** genesis is entered as `BlockValidity::Full` rather than validated up the ladder.
+It is a chain parameter checked against its recorded hash by `consensus::CheckGenesis` before the
+node starts, and its single output is unspendable and therefore never stored — so applying it to
+an unspent output set is a no-op, and there is no weaker state for it to occupy.
+
+**Reversed if:** never.
+
+### 56. Failure is propagated to descendants when it is recorded, not when it is read
+
+**Implemented, 2026-09-05**, in `BlockIndex::RecordFailure`.
+
+Marking a block failed walks its whole subtree immediately, setting `BlockFailure::Ancestor` on
+every descendant. The alternative — deciding eligibility on demand by walking up the parent
+chain — needs no walk at rejection time.
+
+It moves the cost to the wrong place. `IsBetterTip` runs on every candidate tip, and if
+eligibility required walking an ancestry then the single most frequent comparison in the node
+would cost the depth of the chain instead of reading one field. Rejections are rare; tip
+comparisons are not. Marking eagerly also makes the invariant checkable by inspection: no
+eligible entry has an ineligible ancestor, as a property of stored state rather than of a
+traversal nobody can see.
+
+`best_header_` follows the same shape. Adding an entry can only raise the best tip, never lower
+it, so an add is one comparison; only a recorded failure can remove the incumbent, and only then
+is a rescan needed.
+
+**Consequence:** `RecordFailure` allocates — it holds a frontier vector — so it is not `noexcept`,
+and returns how many entries it newly marked so a caller can log the size of what it just ruled
+out.
+
+**Reversed if:** subtrees of rejected blocks grow large enough that the eager walk is itself a
+denial-of-service vector. Since a header must carry valid proof of work to be indexed at all,
+building a large subtree costs real hashing.
+
+### 57. Index entries are allocated individually and never move
+
+**Implemented, 2026-09-05**, in `BlockIndex`'s `unordered_map<Hash256, unique_ptr<BlockIndexEntry>>`.
+
+Entries are held behind `unique_ptr` rather than by value in the map, and every accessor returns
+`const`. Holding them by value would work today: `std::unordered_map` is node-based, so element
+addresses are already stable across rehashing.
+
+They would be stable by accident. The whole structure rests on `parent` pointers taken once and
+dereferenced for the lifetime of the index — by `Ancestor`, by `MedianTimePastAt`, by
+`PlanChainSwitch` — and a `parent` that could dangle is a bug in the code that decides which
+chain is real. Making stability a property of the owning pointer rather than of the container's
+implementation means a future change of container cannot silently break it. The indirection also
+survives moving the `BlockIndex` itself, which by-value storage would not.
+
+The `const` boundary is the other half. Nothing outside the class can obtain a mutable entry:
+`RecordValidity` and `RecordFailure` are members that look the entry up again by hash and mutate
+the stored copy. So the invariants in the class comment — every non-genesis entry has an indexed
+parent, `height == parent->height + 1`, `total_work == parent->total_work + work(bits)`, unique
+increasing `sequence`, no eligible entry with an ineligible ancestor — hold by construction rather
+than by convention.
+
+**Consequence:** one allocation per header. At 300-second blocks that is roughly 105,000 entries
+per era, each around 150 bytes; the index of a decade-old chain is a few megabytes.
+
+**Reversed if:** header count ever makes per-entry allocation the bottleneck. The fix is an arena
+that hands out stable addresses, not by-value storage.
+
+### 58. Difficulty is constant today, and that is a complete rule rather than a stub
+
+**Implemented, 2026-09-05**, in `NextTargetBits`.
+
+A child inherits its predecessor's `target_bits`, clamped so it is never easier than the
+network's floor. Amarian has no retargeting algorithm yet — choosing one is Phase 3, and the
+project's own rules forbid picking a consensus constant without the analysis to justify it.
+
+What matters is that this is a *rule* and not a placeholder. The expected target is computed by
+the node from the chain and the header's claim is checked against it by
+`ContextualCheckBlockHeader`, which means a miner does not get to choose the difficulty they mined
+at — the property that makes proof of work mean anything. A stub would have accepted whatever the
+header claimed and left that property absent until Phase 3. Constant difficulty is also exactly
+what regtest will always do, since its blocks cost a couple of hash attempts by design, so this
+is the final answer for one network already. Replacing the body of the function later changes no
+caller.
+
+The clamp compares `Work::OfCompactTarget` values rather than the compact encodings themselves.
+"Less work than the floor demands" and "easier than the floor" are the same statement, and
+comparing work avoids having to reason about the ordering of a mantissa-and-exponent
+representation. It is unreachable through the index, since `CheckBlockHeader` rejects such a
+header before it is stored — but this same function is what a miner will be handed, and a miner
+asking for a target must never receive an invalid one.
+
+**Consequence:** every block on a chain has the target its genesis block had, until Phase 3.
+Mainnet and testnet are not launchable before then, which is already the plan.
+
+**Reversed if:** Phase 3, by design. The shape of the boundary is what this decision fixes, not
+the algorithm.
+
+
+
+### 59. Activation refuses to shrink the chain, and the refusal is a proof
+
+**Implemented, 2026-09-05**, in `ChainState::ActivateBestChain`.
+
+Selection ranks branches by the work their *headers* claim. A header is 92 bytes; a body is up
+to a megabyte. So the naive activation — plan a switch to the best header, revert to the fork
+point, apply whatever bodies have arrived — hands any peer a way to shorten this node's chain
+for the price of an announcement it never follows up on. The node would abandon a valid tip,
+connect nothing, and sit at the fork point.
+
+The fix is not a timeout or a heuristic. Before a switch starts, the target is truncated to the
+highest block on the new branch whose *whole path* from the fork point is present in the store,
+and the switch is abandoned unless that truncated target still wins under `IsBetterTip`. Because
+every block contributes at least one unit of work, an ancestor's total work is strictly less than
+its descendant's, so a truncated target that is an ancestor of the current tip can never beat it.
+The tip therefore cannot regress — not "usually", not "unless an attacker is patient".
+
+Considered and rejected: reverting optimistically and re-applying the old branch if the new one
+stalled. It is more code, it touches the unspent output set twice for no gain, and it leaves a
+window in which the node's tip is a chain nobody chose.
+
+**Consequence:** during a sync the tip lags the best known header, and `reached_best_header` in
+the activation summary is false. That is the honest report of a node that knows about a chain it
+has not received.
+
+**Reversed if:** never on these grounds. The bound is arithmetic, not empirical.
+
+### 60. Atomicity is per block, not per reorganisation
+
+**Implemented, 2026-09-05**, in `ChainState`, resting on `ConnectBlock` and `DisconnectBlock`.
+
+Each block is applied or reversed in one commit, so every state the node passes through during a
+reorganisation is the unspent output set for *some* valid chain. An interruption leaves a shorter
+chain, never an inconsistent one, and the next activation continues from wherever it stopped.
+
+The alternative — one staging layer spanning the whole switch — buys atomicity over a span where
+a partial result is already correct, and pays for it with memory proportional to the number of
+blocks in the switch. An initial sync is a switch of hundreds of thousands of blocks; it would
+hold the entire change set before committing anything.
+
+**Consequence:** a crash mid-reorganisation can leave the node on a *worse* chain than the one it
+started from, which the next activation repairs by walking back up. This is preferable to a set
+that describes no chain at all, which no amount of later work can repair.
+
+**Reversed if:** a measured need for the whole switch to be observable atomically appears — an
+RPC that must never see an intermediate tip, say. That is an interface concern and would be
+answered with a lock rather than a staging buffer.
+
+### 61. Genesis is seeded onto the active chain, never connected
+
+**Implemented, 2026-09-05**, in `ChainState`'s constructor.
+
+Genesis's single output carries `LOCK_VERSION_UNSPENDABLE`, and `ConnectBlock` stores no
+unspendable output — the `IsStored` predicate it shares with `DisconnectBlock` drops them. So the
+unspent output set before genesis and the set after it are byte-for-byte the same set. "Genesis is
+applied" and "genesis is not applied" describe identical state, which means there is nothing for a
+first activation to get right or wrong about the difference.
+
+Seeding it rather than connecting it also removes a requirement that would otherwise be real: the
+node would need genesis's *body* in its block store before it could make any progress at all.
+Genesis is a chain parameter, reconstructible from `BuildGenesisBlock`, not a block that arrived
+from anywhere, and making progress conditional on having stored it would invent a startup failure
+mode for no gain.
+
+**Consequence:** `ActiveChain` is never empty and `ChainState::Tip()` never returns null, which
+`DisconnectTip` relies on — a plan naming genesis for reversal is reported as
+`ChainOutOfStep` rather than attempted.
+
+**Reversed if:** genesis ever pays a spendable output. It will not; an unspendable genesis
+coinbase is itself a deliberate decision recorded earlier.
+
+### 62. Block and undo storage is an interface, and the memory implementation is not a stub
+
+**Implemented, 2026-09-05**, in `chain::BlockStore` and `chain::MemoryBlockStore`.
+
+The code that decides which chain is real must not link a database — the same layering rule that
+keeps consensus free of storage, enforced the same way, by target dependencies. So bodies and undo
+records live behind five virtual functions, and RocksDB will be another implementation of them
+rather than a change to anything above.
+
+`HaveBlock` is separate from `GetBlock` for the reason `CoinsView::HaveCoin` is separate from
+`GetCoin`: deciding how far up a branch this node could get asks only about presence, and the
+availability walk in decision 59 runs on every activation. A backend answers presence without
+deserialising a megabyte.
+
+`GetBlock` returns by value. For any backend that is not a memory map the read *is* a
+deserialisation into a fresh object, and returning a pointer would put a lifetime question into the
+interface that only one implementation could answer.
+
+The in-memory implementation is complete, not provisional: it implements every function with the
+real semantics and is what regtest and the unit tests run against. The one thing it does not do is
+survive a process exit, which is exactly and only what the RocksDB implementation adds.
+
+**Consequence:** until persistence lands, a node loses its chain on restart. That is a missing
+component, not a defect in this one.
+
+**Reversed if:** never — but the interface will gain a batch or a transaction handle when RocksDB
+arrives, if writing a body and its undo record separately turns out to be a durability gap.
+
+### 63. Accepting a block and activating a chain are separate operations
+
+**Implemented, 2026-09-05**, as `ChainState::AcceptBlock` and `ChainState::ActivateBestChain`.
+
+Their failures are different kinds of fact, and merging them would force a caller to disentangle
+them. A block can be entirely valid and still not worth switching to. A switch can fail for
+reasons that say nothing about the block that triggered it — a lost undo record, a set that
+disagrees with its own history. One function returning one error type would have to flatten both
+into a vocabulary where a peer's misbehaviour and this machine's disk trouble look alike, and peer
+scoring in Phase 4 depends on telling them apart.
+
+The split is also what lets a synchronising node accept a run of blocks and activate once, instead
+of reorganising on every message.
+
+`AcceptBlock` runs `CheckBlock` before storing, so nothing structurally invalid is ever written,
+and records the result on the entry's validity ladder so activation does not repeat it. It is
+idempotent: a block arriving from two peers at once is checked once, because the hash names the
+bytes and a body already stored under that hash is that body.
+
+**Consequence:** a caller that accepts without activating has a node whose tip is behind what it
+knows. That is a legitimate state and the activation summary reports it.
+
+**Reversed if:** never on these grounds.
+
 ## Still open
 
 | Question | Decided in |
