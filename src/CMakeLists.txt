@@ -96,6 +96,21 @@ add_library(amarian_chain STATIC
 target_link_libraries(amarian_chain PUBLIC amarian::utxo)
 add_library(amarian::chain ALIAS amarian_chain)
 
+# --- mining: deciding what the next block should be --------------------------
+# The only layer that answers *what block should exist next*; every other layer answers
+# *is this block allowed*. Deliberately a separate target from consensus rather than a
+# corner of it: an assembler sharing a translation unit with the validator could produce a
+# block that passes because both agree on a mistake, and keeping them apart is what makes
+# the assembler's output something the rules judge rather than something they assume.
+#
+# Links chain, because the height, the previous hash and the target all come from the tip.
+# Nothing links mining in return — a node builds blocks, and no rule consults a builder.
+add_library(amarian_mining STATIC
+    mining/block_assembler.cpp
+)
+target_link_libraries(amarian_mining PUBLIC amarian::chain)
+add_library(amarian::mining ALIAS amarian_mining)
+
 # --- storage: the state that survives a restart ------------------------------
 # The first layer permitted to link a database, and the only one. Everything below it is
 # written against the interfaces it implements — utxo::CoinsView, chain::BlockStore,
