@@ -83,6 +83,17 @@ add_library(amarian_utxo STATIC
 target_link_libraries(amarian_utxo PUBLIC amarian::consensus)
 add_library(amarian::utxo ALIAS amarian_utxo)
 
+# --- chain: which of the known blocks the node actually follows --------------
+# The tree of known headers, the accumulated work on each branch, and the walk from one
+# tip to another. Above utxo because activating a chain means applying blocks to the
+# unspent output set; still below storage and networking, so the code that decides which
+# chain is real can be tested without either.
+add_library(amarian_chain STATIC
+    chain/block_index.cpp
+)
+target_link_libraries(amarian_chain PUBLIC amarian::utxo)
+add_library(amarian::chain ALIAS amarian_chain)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to

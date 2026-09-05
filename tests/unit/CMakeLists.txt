@@ -49,6 +49,11 @@ amarian_add_test(test_utxo unit
 )
 target_link_libraries(test_utxo PRIVATE amarian::utxo)
 
+amarian_add_test(test_chain unit
+    chain_block_index_test.cpp
+)
+target_link_libraries(test_chain PRIVATE amarian::chain)
+
 amarian_add_test(test_version unit
     version_test.cpp
 )
