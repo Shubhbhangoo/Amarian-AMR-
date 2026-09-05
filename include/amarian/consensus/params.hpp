@@ -189,6 +189,11 @@ struct ChainParams {
     Hash256 genesis_hash;
 
     int64_t target_block_seconds;
+
+    /// Seconds per half-life of the ASERT difficulty retarget (see above).
+    /// Part of consensus: every node must compute the same target from the same
+    /// schedule deviation, so this is a per-network constant and never an option.
+    int64_t asert_half_life_seconds;
     uint32_t coinbase_maturity;
     size_t max_block_weight;
     BlockLimits block_limits;
@@ -277,6 +282,20 @@ inline constexpr uint32_t POW_LIMIT_BITS = 0x1D00FFFFU;
 /// attempts away and tests do not spend their time mining.
 inline constexpr uint32_t REGTEST_POW_LIMIT_BITS = 0x207FFFFFU;
 
+// --- ASERT half-lives --------------------------------------------------------
+//
+// The half-life of the difficulty retarget, in seconds: the cumulative schedule
+// deviation that doubles difficulty. Mainnet's two days is the value the ASERT
+// literature and the fielded Bitcoin Cash algorithm converged on; at Amarian's
+// 300-second target that is 576 blocks. Testnet's one hour (12 blocks) keeps the
+// test network responsive when its hashrate swings, the same choice Bitcoin Cash
+// made for its test networks. Regtest never retargets (its difficulty is trivial
+// by design), so its half-life is unused and exists only so the field is never
+// zero. Chosen with simulation evidence, Phase 3; see DECISIONS.
+inline constexpr int64_t MAINNET_ASERT_HALF_LIFE_SECONDS = 172'800;
+inline constexpr int64_t TESTNET_ASERT_HALF_LIFE_SECONDS = 3'600;
+inline constexpr int64_t REGTEST_ASERT_HALF_LIFE_SECONDS = 3'600;
+
 // --- Genesis ----------------------------------------------------------------
 //
 // Genesis is a chain parameter, not a computed value: its hash is checked at startup
@@ -345,6 +364,7 @@ inline constexpr ChainParams MAINNET_PARAMS{
     .genesis_nonce = MAINNET_GENESIS_NONCE,
     .genesis_hash = MAINNET_GENESIS_HASH,
     .target_block_seconds = TARGET_BLOCK_SECONDS,
+    .asert_half_life_seconds = MAINNET_ASERT_HALF_LIFE_SECONDS,
     .coinbase_maturity = COINBASE_MATURITY,
     .max_block_weight = MAX_BLOCK_WEIGHT,
     .block_limits = CONSENSUS_BLOCK_LIMITS,
@@ -369,6 +389,7 @@ inline constexpr ChainParams TESTNET_PARAMS{
     .genesis_nonce = TESTNET_GENESIS_NONCE,
     .genesis_hash = TESTNET_GENESIS_HASH,
     .target_block_seconds = TARGET_BLOCK_SECONDS,
+    .asert_half_life_seconds = TESTNET_ASERT_HALF_LIFE_SECONDS,
     .coinbase_maturity = COINBASE_MATURITY,
     .max_block_weight = MAX_BLOCK_WEIGHT,
     .block_limits = CONSENSUS_BLOCK_LIMITS,
@@ -395,6 +416,7 @@ inline constexpr ChainParams REGTEST_PARAMS{
     .genesis_nonce = REGTEST_GENESIS_NONCE,
     .genesis_hash = REGTEST_GENESIS_HASH,
     .target_block_seconds = TARGET_BLOCK_SECONDS,
+    .asert_half_life_seconds = REGTEST_ASERT_HALF_LIFE_SECONDS,
     .coinbase_maturity = 20,
     .max_block_weight = MAX_BLOCK_WEIGHT,
     .block_limits = CONSENSUS_BLOCK_LIMITS,
@@ -485,6 +507,9 @@ static_assert(BlockReward(static_cast<uint32_t>(IssuanceEndHeight(REGTEST_PARAMS
 // Only mainnet is a real network: neither relaxation may reach it.
 static_assert(!MAINNET_PARAMS.allow_min_difficulty_blocks);
 static_assert(!MAINNET_PARAMS.trivial_difficulty);
+static_assert(MAINNET_PARAMS.asert_half_life_seconds > 0);
+static_assert(TESTNET_PARAMS.asert_half_life_seconds > 0);
+static_assert(REGTEST_PARAMS.asert_half_life_seconds > 0);
 static_assert(MAINNET_PARAMS.pow_limit_bits != REGTEST_PARAMS.pow_limit_bits);
 
 // The derived bounds must be reachable in a block but not exceed what one can hold.

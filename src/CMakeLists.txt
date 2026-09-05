@@ -60,6 +60,7 @@ add_library(amarian::primitives ALIAS amarian_primitives)
 # constraint is actually enforced rather than merely described.
 add_library(amarian_consensus STATIC
     consensus/genesis.cpp
+    consensus/asert.cpp
     consensus/target.cpp
     consensus/validation.cpp
     consensus/work.cpp
@@ -160,3 +161,12 @@ add_executable(amarian-genesis
     tools/genesis_tool.cpp
 )
 target_link_libraries(amarian-genesis PRIVATE amarian::consensus Threads::Threads)
+# --- amarian-retarget-sim: the Phase 3 difficulty simulation ----------------
+# Links the real consensus retarget (chain::NextTargetBits) and drives it with a
+# synthetic hashrate; the acceptance evidence for the difficulty choice lives in
+# the numbers it prints, recorded in DEVELOPMENT_STATUS.md and DECISIONS.md.
+add_executable(amarian-retarget-sim
+    tools/retarget_sim.cpp
+)
+target_link_libraries(amarian-retarget-sim PRIVATE amarian::chain)
+

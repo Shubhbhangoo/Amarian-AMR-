@@ -197,18 +197,18 @@ using HeaderError = std::variant<consensus::ValidationError, IndexError>;
 
 /// The `target_bits` a child of `parent` must carry.
 ///
-/// **Amarian has constant difficulty today.** A child inherits its predecessor's target,
-/// clamped so that it is never easier than the network's floor. This is a complete rule
-/// rather than a stub — it is exactly what a network with no retargeting algorithm does,
-/// and it is what regtest, whose blocks cost a couple of hash attempts by design, will
-/// always do — but it is not the final one. Choosing a retargeting algorithm is Phase 3
-/// and needs the analysis the project's own rules demand before a consensus constant is
-/// picked.
+/// **ASERT**, anchored at genesis and evaluated at the tip. The expected target is
+/// the genesis target scaled by `2^(schedule deviation / half-life)`, where the
+/// schedule deviation is how far the tip's header time is from where an on-schedule
+/// chain would be; `consensus::AsertNextBits` is the pure integer rule and this
+/// function supplies it the facts the index holds (the tip's height and header
+/// time) and the network's constants. Regtest never retargets: its
+/// `trivial_difficulty` branch answers with the network floor, as it always has.
 ///
-/// What matters now is the *shape*: the expected target is computed by the node from the
-/// chain, and the header's claim is checked against it by `ContextualCheckBlockHeader`. A
-/// miner does not get to choose the difficulty they mined at. Replacing the body of this
-/// function later changes no caller.
+/// What matters is the *shape*: the expected target is computed by the node from
+/// the chain, and the header's claim is checked against it by
+/// `ContextualCheckBlockHeader`. A miner does not get to choose the difficulty they
+/// mined at.
 [[nodiscard]] uint32_t NextTargetBits(const BlockIndexEntry& parent,
                                       const ChainParams& params) noexcept;
 

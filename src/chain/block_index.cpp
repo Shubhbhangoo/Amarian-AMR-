@@ -1,5 +1,6 @@
 #include <amarian/chain/block_index.hpp>
 
+#include <amarian/consensus/asert.hpp>
 #include <amarian/consensus/genesis.hpp>
 
 #include <algorithm>
@@ -79,18 +80,22 @@ int64_t MedianTimePastAt(const BlockIndexEntry& entry) {
 }
 
 uint32_t NextTargetBits(const BlockIndexEntry& parent, const ChainParams& params) noexcept {
-    const uint32_t inherited = parent.header.target_bits;
-
-    // Less work than the floor demands is the same statement as "easier than the floor",
-    // and comparing work rather than the compact encodings avoids having to reason about
-    // mantissa-and-exponent ordering. Unreachable through the index, since
-    // `CheckBlockHeader` rejects such a header before it is stored — but this answer is
-    // also what a miner will be handed, and a miner asking for a target should never be
-    // able to receive an invalid one.
-    if (Work::OfCompactTarget(inherited) < Work::OfCompactTarget(params.pow_limit_bits)) {
+    // Regtest never retargets: its floor is the largest target the encoding admits,
+    // a block costs a couple of hash attempts by design, and the point of the network
+    // is deterministic on-demand generation. This branch is the explicit statement of
+    // what `trivial_difficulty` means, and it is what the old inherit-and-clamp rule
+    // did for every network before retargeting existed.
+    if (params.trivial_difficulty) {
         return params.pow_limit_bits;
     }
-    return inherited;
+
+    // ASERT, anchored at genesis and evaluated at the tip: the expected target is the
+    // genesis target scaled by 2^(schedule deviation / half-life), where the schedule
+    // deviation is how far the tip's header time is from an on-schedule chain. A pure
+    // consensus function of facts the index holds; the rule itself clamps to the
+    // network floor, so a miner can never be handed, nor a header judged against, a
+    // target easier than the network permits.
+    return consensus::AsertNextBits(params, parent.height, parent.header.timestamp);
 }
 
 consensus::HeaderContext

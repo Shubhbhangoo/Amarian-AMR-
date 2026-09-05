@@ -8,6 +8,7 @@
 
 #include <amarian/chain/block_index.hpp>
 
+#include <amarian/consensus/asert.hpp>
 #include <amarian/consensus/params.hpp>
 #include <amarian/consensus/target.hpp>
 
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -335,20 +337,88 @@ TEST(MedianTimePastAt, IsTheMedianOfWhatExistsNearGenesis) {
     EXPECT_EQ(MedianTimePastAt(*second), first->header.timestamp);
 }
 
-TEST(NextTargetBits, IsInheritedAndNeverEasierThanTheFloor) {
+TEST(NextTargetBits, RegtestNeverRetargets) {
+    // Regtest difficulty is trivial by design, so its seam always answers with the
+    // network floor, whatever the tip's height or timestamp claims. The second and
+    // third cases build synthetic tips whose timestamps are absurdly ahead of and
+    // behind schedule; a retargeting network would move difficulty for both.
     BlockIndex index = BlockIndex::ForNetwork(Params());
-    EXPECT_EQ(NextTargetBits(index.Genesis(), Params()), Params().genesis_bits);
+    EXPECT_EQ(NextTargetBits(index.Genesis(), Params()), Params().pow_limit_bits);
 
     const BlockIndexEntry* child = Extend(index, index.Genesis(), 1);
     ASSERT_NE(child, nullptr);
-    EXPECT_EQ(NextTargetBits(*child, Params()), child->header.target_bits);
+    EXPECT_EQ(NextTargetBits(*child, Params()), Params().pow_limit_bits);
 
-    // Unreachable through the index, which rejects a header easier than the floor before
-    // storing it — but this answer is also what a miner is handed, and a miner asking for
-    // a target must never receive an invalid one.
-    BlockIndexEntry easier;
-    easier.header.target_bits = 0x1E00'FFFFU;
-    EXPECT_EQ(NextTargetBits(easier, MAINNET_PARAMS), MAINNET_PARAMS.pow_limit_bits);
+    // Both height fields are set, here and below. The rule reads the *entry's* height,
+    // which the index derives, while the header carries the miner's claim of it; a
+    // synthetic entry that set only the header's would leave the rule looking at height
+    // zero and answering with the anchor's target for every case.
+    BlockIndexEntry early;
+    early.height = 500;
+    early.header.height = 500;
+    early.header.timestamp = Params().genesis_timestamp + 500 * 300 - 172800;
+    EXPECT_EQ(NextTargetBits(early, Params()), Params().pow_limit_bits);
+
+    BlockIndexEntry late;
+    late.height = 500;
+    late.header.height = 500;
+    late.header.timestamp = Params().genesis_timestamp + 500 * 300 + 1000000000LL;
+    EXPECT_EQ(NextTargetBits(late, Params()), Params().pow_limit_bits);
+}
+
+TEST(NextTargetBits, RetargetingNetworksUseTheConsensusAsertRule) {
+    // The seam is exactly the pure consensus rule fed the network's constants and
+    // the tip's height and header time; a divergence here would be a consensus
+    // split between the assembler and the validator.
+    //
+    // Each height is tried on schedule and well ahead of it. The second case is what
+    // makes this test say anything: on schedule the rule answers with the anchor's own
+    // target, which is also what it answers for a tip it thinks is at height zero — so
+    // an on-schedule-only check would pass even if the seam never passed the height on
+    // at all.
+    const ChainParams* networks[] = {&MAINNET_PARAMS, &TESTNET_PARAMS};
+    for (const ChainParams* params : networks) {
+        for (const uint32_t height : {1U, 288U, 576U, 100000U}) {
+            const int64_t on_time =
+                params->genesis_timestamp + static_cast<int64_t>(height) * 300;
+            for (const int64_t skew : {int64_t{0}, int64_t{-200000}}) {
+                BlockIndexEntry tip;
+                tip.height = height;
+                tip.header.height = height;
+                tip.header.timestamp = on_time + skew;
+                EXPECT_EQ(NextTargetBits(tip, *params),
+                          consensus::AsertNextBits(*params, height, on_time + skew))
+                    << params->name << " height " << height << " skew " << skew;
+            }
+        }
+    }
+
+    // And the height is not merely passed but load-bearing. A chain 200,000 seconds
+    // ahead of schedule at height 288 has earned a harder target than the anchor's,
+    // which is the answer a tip whose height went missing would have given.
+    BlockIndexEntry ahead;
+    ahead.height = 288;
+    ahead.header.height = 288;
+    ahead.header.timestamp = MAINNET_PARAMS.genesis_timestamp + 288 * 300 - 200000;
+    const uint32_t harder = NextTargetBits(ahead, MAINNET_PARAMS);
+    EXPECT_NE(harder, MAINNET_PARAMS.genesis_bits);
+    const std::optional<Target> harder_target = CompactToTarget(harder);
+    const std::optional<Target> anchor_target = CompactToTarget(MAINNET_PARAMS.genesis_bits);
+    ASSERT_TRUE(harder_target.has_value());
+    ASSERT_TRUE(anchor_target.has_value());
+    EXPECT_LT(*harder_target, *anchor_target);
+}
+
+TEST(NextTargetBits, TheAsertRuleIsNeverEasierThanTheFloor) {
+    // A tip whose schedule position would make the next block trivially easy (the
+    // chain far behind schedule) must clamp to the floor, never below it.
+    BlockIndexEntry tip;
+    tip.height = 1000;
+    tip.header.height = 1000;
+    tip.header.timestamp = MAINNET_PARAMS.genesis_timestamp + 1000 * 300 + 1000000000LL;
+    const uint32_t bits = NextTargetBits(tip, MAINNET_PARAMS);
+    EXPECT_EQ(bits, MAINNET_PARAMS.pow_limit_bits);
+    EXPECT_TRUE(CompactToTarget(bits).has_value());
 }
 
 TEST(BlockIndexEntry, AncestorWalksToAGivenHeight) {
