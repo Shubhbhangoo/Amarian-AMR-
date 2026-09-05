@@ -4,15 +4,21 @@
 /// What this binary does: parses options, selects a network, checks that every consensus
 /// signature scheme is usable in this build and that this build's genesis is the selected
 /// network's, opens the chainstate, restores the chain a previous run left behind, brings the
-/// active chain up to the best block it holds, and — on request — mines blocks onto it or
-/// moves blocks in and out of a flat file. Then it makes the database durable and exits.
+/// active chain up to the best block it holds, and — on request — mines blocks onto it, moves
+/// blocks in and out of a flat file, or serves JSON-RPC on loopback until interrupted. Then it
+/// makes the database durable and exits.
 ///
-/// What it does not do: talk to peers. There is no event loop here because there is nothing
-/// yet to service — the network layer is Phase 4, and until it exists a process sitting in a
-/// loop would only be idling while claiming to be a node. So the daemon does the work it was
-/// asked for and stops, which is a complete thing to be and is what makes two independent
-/// nodes checkable against each other today: one mines and exports, the other imports and
-/// judges every block by its own rules, and the two tips are compared.
+/// What it does not do: talk to peers. The network layer is Phase 4, and until it exists blocks
+/// move between nodes through a flat file — which is enough to make two independent nodes
+/// checkable against each other today: one mines and exports, the other imports and judges every
+/// block by its own rules, and the two tips are compared.
+///
+/// There is an event loop, but only under `--rpc`, and only because a miner cannot be a flag:
+/// `--generate` searches nonces here for a fixed count and stops, while a mining program needs a
+/// node that is still listening when its solution arrives. Every other mode does the work it was
+/// asked for and exits, which is a complete thing to be rather than a process idling while
+/// claiming to be a node.
+
 ///
 /// Every clock read in this file happens here, at the top, and is passed down as a value.
 /// Nothing in consensus, the chain layer or the assembler calls a clock, which is what makes
@@ -29,6 +35,8 @@
 #include <amarian/mining/block_assembler.hpp>
 #include <amarian/primitives/block.hpp>
 #include <amarian/primitives/lock.hpp>
+#include <amarian/rpc/http.hpp>
+#include <amarian/rpc/server.hpp>
 #include <amarian/storage/chain_db.hpp>
 #include <amarian/util/args.hpp>
 #include <amarian/util/hex.hpp>
@@ -116,6 +124,13 @@ void RegisterOptions(ArgsParser& parser) {
                 .kind = ArgKind::String,
                 .value_hint = "<hex>",
                 .help = "Hex-encoded lock the mined reward pays to."});
+    parser.Add({.name = "rpc",
+                .kind = ArgKind::Flag,
+                .help = "Serve JSON-RPC on loopback until interrupted."});
+    parser.Add({.name = "rpcport",
+                .kind = ArgKind::Integer,
+                .value_hint = "<port>",
+                .help = "Port for --rpc. Default: the network's (12501/12511/12521)."});
     parser.Add({.name = "export-blocks",
                 .kind = ArgKind::String,
                 .value_hint = "<file>",
@@ -716,6 +731,70 @@ bool ImportBlocks(chain::ChainState& state,
     return ok && refused == 0;
 }
 
+/// Serves JSON-RPC on loopback until interrupted.
+///
+/// This is the only mode in which the daemon has an event loop, and the reason it is worth
+/// having one is that a miner cannot be a flag. `--generate` searches nonces in this process for
+/// a fixed number of blocks and stops; a mining program wants to ask for a template, search on
+/// its own hardware for as long as it likes, and hand back a solution — which needs a node that
+/// is still there when the answer arrives.
+///
+/// The cookie is written here, immediately before the port opens, and removed on the way out. It
+/// is not written at startup for a node that will not serve: a credential file for an interface
+/// nobody is offering is a file whose only function is to be read by something that should not
+/// have found it.
+[[nodiscard]] bool ServeRpc(chain::ChainState& state, PoolKeeper& keeper,
+                            const std::optional<Lock>& payout, uint16_t port,
+                            const std::filesystem::path& datadir, const ChainParams& params) {
+    const std::filesystem::path cookie_path = datadir / ".cookie";
+    const std::expected<rpc::Cookie, std::string> cookie = rpc::Cookie::Generate(cookie_path);
+    if (!cookie.has_value()) {
+        AMARIAN_ERROR(log::Category::General, "cannot write the RPC cookie: {}", cookie.error());
+        return false;
+    }
+    if (!payout.has_value()) {
+        // Not an error: every other method still works, and a node serving `getblockchaininfo`
+        // to a monitor has no use for a payout. Said out loud because the alternative is a miner
+        // discovering it from a JSON error code.
+        AMARIAN_WARN(log::Category::General,
+                     "rpc: no --payout, so getblocktemplate will refuse until one is given");
+    }
+
+    // The chain, the pool and the payout the rest of this process is using — the same objects,
+    // not copies. `getblocktemplate` describing a chain the daemon is not on would be worse than
+    // no interface at all, and the pool is the one the keeper maintains across connects and
+    // reorganisations, because a template is assembled from whatever it holds without a second
+    // check against the coins set.
+    rpc::Node node;
+    node.state = &state;
+    node.pool = &keeper.Pool();
+    node.params = &params;
+    node.payout = payout;
+
+    rpc::ServerConfig config;
+    config.port = port;
+    config.expected_authorization = cookie->Authorization();
+
+    std::expected<rpc::Server, std::string> server = rpc::Server::Bind(node, config);
+    if (!server.has_value()) {
+        AMARIAN_ERROR(log::Category::General, "{}", server.error());
+        std::error_code ignored;
+        std::filesystem::remove(cookie_path, ignored);
+        return false;
+    }
+    AMARIAN_INFO(log::Category::General, "rpc: the credential for this run is in '{}'",
+                 cookie_path.string());
+
+    server->Serve();
+
+    // Removed rather than left behind, because the token is only good while this process holds
+    // the port, and a file that outlives its authority is a file somebody eventually trusts.
+    std::error_code ignored;
+    std::filesystem::remove(cookie_path, ignored);
+    AMARIAN_INFO(log::Category::General, "rpc: stopped");
+    return true;
+}
+
 int Run(int argc, char* argv[]) {
     ArgsParser parser("amariand", "[options]");
     RegisterOptions(parser);
@@ -791,6 +870,20 @@ int Run(int argc, char* argv[]) {
     }
     const uint64_t attempts =
         asked_attempts > 0 ? static_cast<uint64_t>(asked_attempts) : DEFAULT_GENERATE_ATTEMPTS;
+
+    const int64_t asked_rpc_port = parser.GetInt("rpcport", 0);
+    if (asked_rpc_port < 0 || asked_rpc_port > 65535) {
+        std::fprintf(stderr, "amariand: --rpcport must be between 0 and 65535\n");
+        return EXIT_USAGE;
+    }
+    if (asked_rpc_port != 0 && !parser.Has("rpc")) {
+        // Refused rather than ignored. An operator who chose a port and did not get a server is
+        // owed the reason now, not a connection refused later.
+        std::fprintf(stderr, "amariand: --rpcport does nothing without --rpc\n");
+        return EXIT_USAGE;
+    }
+    const uint16_t rpc_port = asked_rpc_port != 0 ? static_cast<uint16_t>(asked_rpc_port)
+                                                  : params.default_rpc_port;
 
     const std::optional<std::string> datadir = ResolveDataDir(parser, params);
     if (!datadir.has_value()) {
@@ -872,6 +965,13 @@ int Run(int argc, char* argv[]) {
     }
     if (acted) {
         ReportTip(state);
+    }
+
+    // Last, and after the one-shot actions, so that `--generate 1 --rpc` mines its block and then
+    // serves rather than serving and never reaching the block. This call does not return until
+    // the server is interrupted.
+    if (parser.Has("rpc") && !ServeRpc(state, keeper, payout, rpc_port, *datadir, params)) {
+        return EXIT_FAILURE;
     }
 
     // Durability against the machine dying rather than the process dying, which every commit

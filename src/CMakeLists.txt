@@ -176,6 +176,24 @@ target_link_libraries(amarian_rpc
 )
 add_library(amarian::rpc ALIAS amarian_rpc)
 
+# --- rpc_server: the socket the interface is reachable through ------------------
+# A separate target from amarian::rpc so that the networking library stops here. Nothing
+# but this file and the daemon links Asio, which is the same boundary drawn around OpenSSL
+# and RocksDB: a target that wanted to open its own socket would have to be given the
+# ability, and the CMake graph is where that is refused.
+#
+# amarian::asio is PRIVATE, and the pimpl in server.hpp is the other half of that promise —
+# one is the link-time boundary, the other keeps Asio's headers out of anything that
+# includes ours.
+add_library(amarian_rpc_server STATIC
+    rpc/server.cpp
+)
+target_link_libraries(amarian_rpc_server
+    PUBLIC amarian::rpc
+    PRIVATE amarian::asio
+)
+add_library(amarian::rpc_server ALIAS amarian_rpc_server)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
@@ -188,13 +206,18 @@ add_library(amarian::version ALIAS amarian_version)
 
 # --- amariand: the node daemon ---------------------------------------------
 # Links storage and mining, which is the whole shape of what a node is today: it keeps a chain
-# on disk, and it can build the next block. It does not link a network layer because there is
-# not one yet — Phase 4 — and until then blocks move between nodes through a flat file.
+# on disk, it can build the next block, and it can answer a miner asking for one. It links no
+# peer-to-peer layer because there is not one yet — Phase 4 — and until then blocks move
+# between nodes through a flat file.
+#
+# amarian::rpc_server is the only path by which Asio reaches this binary, and it reaches it
+# PRIVATEly and through a pimpl: the daemon opens no socket of its own.
 add_executable(amariand
     node/amariand.cpp
 )
 target_link_libraries(amariand
-    PRIVATE amarian::storage amarian::mining amarian::consensus amarian::util amarian::version
+    PRIVATE amarian::storage amarian::mining amarian::rpc_server amarian::consensus
+            amarian::util amarian::version
 )
 
 # --- amarian-genesis: prints, checks and regenerates genesis parameters -----
