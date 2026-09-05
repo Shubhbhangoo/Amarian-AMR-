@@ -141,10 +141,15 @@ target_link_libraries(amarian_version PUBLIC amarian_settings PRIVATE amarian::o
 add_library(amarian::version ALIAS amarian_version)
 
 # --- amariand: the node daemon ---------------------------------------------
+# Links storage and mining, which is the whole shape of what a node is today: it keeps a chain
+# on disk, and it can build the next block. It does not link a network layer because there is
+# not one yet — Phase 4 — and until then blocks move between nodes through a flat file.
 add_executable(amariand
     node/amariand.cpp
 )
-target_link_libraries(amariand PRIVATE amarian::consensus amarian::util amarian::version)
+target_link_libraries(amariand
+    PRIVATE amarian::storage amarian::mining amarian::consensus amarian::util amarian::version
+)
 
 # --- amarian-genesis: prints, checks and regenerates genesis parameters -----
 # A tool rather than a test: it is how the recorded nonces were produced, and
