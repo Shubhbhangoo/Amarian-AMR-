@@ -9,10 +9,11 @@ work is planned. Anything not listed as done is not done.
 **Phase 1 status:** in progress. Canonical encoding, consensus hashing, the
 transaction and block primitives, the chain parameters, the compact target codec, the
 issuance schedule, genesis for all three networks, the context-free validation rules,
-the signature scheme registry, the signature hash and spend authorisation have landed.
-The two contextual rules that need chain state — that an input's outpoint exists and is
-unspent, and coinbase maturity — the UTXO set, chain selection, chainstate persistence
-and the two-node acceptance test remain.
+the signature scheme registry, the signature hash, spend authorisation, the two
+contextual transaction rules that need chain state — that an input's outpoint exists and
+is unspent, and coinbase maturity — and the unspent output set with atomic block
+application and reversal have landed. Chain selection, chainstate persistence and the
+two-node acceptance test remain.
 
 ---
 
@@ -21,7 +22,7 @@ and the two-node acceptance test remain.
 | Criterion | State | Evidence |
 |---|---|---|
 | Clean build | met | Nine presets configure and build with no warnings and `-Werror` on; see the matrix under Test results |
-| Clean test command | met | `ctest --preset dev` — 47/47 when Phase 0 closed, 202/202 now, and the same count on `debug`, `clang-dev`, `asan`, `tsan` |
+| Clean test command | met | `ctest --preset dev` — 47/47 when Phase 0 closed, 221/221 now, and the same count on `debug`, `clang-dev`, `asan`, `tsan` |
 | Basic executable | met | `amariand --version`, `--build-info`, `--help` |
 | Basic project documentation | met | `README.md`, `SECURITY.md`, nine documents in `docs/`, `fuzz/README.md`, this file |
 
@@ -39,13 +40,13 @@ validate the same chain.** Progress towards it, by component:
 | Chain parameters, networks, compact target codec, PoW check | landed — part of the 44 `test_consensus` tests |
 | Issuance schedule as a consensus rule | landed — `MAX_MONEY` is a `static_assert` computed from the schedule |
 | Genesis block, reward zero enforced as a rule | landed — three networks mined, recomputed and checked at node startup |
-| `consensus::ValidationError` — allocation-free, enum-reasoned | landed — 48 named rules, total `switch`, no `default` |
+| `consensus::ValidationError` — allocation-free, enum-reasoned | landed — 52 named rules, total `switch`, no `default` |
 | Context-free transaction, header and block validation | landed — tested |
 | Scheme registry and BIP-340 Schnorr verification | landed — 15 `test_crypto` tests, including the BIP-340 vectors and both post-quantum schemes; `amariand` refuses to start if a registered scheme is unavailable |
 | Signature hash | landed — fixed 181-byte preimage, midstates reused once per transaction, 15 tests |
-| Spend authorisation (lock commitment, threshold walk, fee) | landed — `CheckSpendAuthorisation` and `TransactionFee`, 16 tests against real ML-DSA-44 signatures |
-| Contextual transaction rules that need state (outpoint exists and unspent, maturity) | not started — both are UTXO-set lookups |
-| UTXO set with apply and revert | not started |
+| Spend authorisation (lock commitment, threshold walk, fee) | landed — `CheckSpendAuthorisation` and `TransactionFee` over `std::span<const Coin>`, 16 tests against real ML-DSA-44 signatures |
+| Contextual transaction rules that need state (outpoint exists and unspent, maturity) | landed — `CheckTransactionInputs`, cheapest rule first and cryptography last |
+| UTXO set with apply and revert | landed — `amarian::utxo`: the layered coins cache, `ConnectBlock`/`DisconnectBlock`, the undo record and its encoding; 19 `test_utxo` tests |
 | Block index and chain selection | not started |
 | RocksDB chainstate persistence | not started |
 | Node wiring and the two-node integration test | not started |
@@ -216,11 +217,13 @@ against simulated hashrate rather than asserted.
   cheapest-first because the order decides how much work an attacker can make a node
   do before rejection.
 - Spend authorisation — `CheckSpendAuthorisation` and `TransactionFee` — takes the
-  outputs being spent as a `std::span<const TxOutput>` rather than a database handle.
-  Finding those outputs is a lookup; deciding whether they may be spent is arithmetic
+  coins being spent as a `std::span<const Coin>` rather than a database handle.
+  Finding those coins is a lookup; deciding whether they may be spent is arithmetic
   and cryptography. Splitting them keeps the expensive half a pure function of
   values, which is what lets it be tested exhaustively without a database and, later,
-  run on several threads without a lock.
+  run on several threads without a lock. It is a span of `Coin` rather than `TxOutput`
+  because maturity needs each coin's creation height, and after a reorganisation the
+  block that created it may not be reachable.
 - A threshold is satisfied by **ordered forward match**: one key index advances
   monotonically across the whole signature list. At most `keys.size()` verifications
   happen per input however many signatures are offered, and exactly one ordering of a
@@ -233,10 +236,68 @@ against simulated hashrate rather than asserted.
   `amariand` refuses to start when a *registered* scheme is unavailable from its
   backend — otherwise a node with the wrong OpenSSL would report a known scheme as
   unknown and accept every spend under it while believing it was verifying.
-- A block that passes `CheckBlock` is still not valid: the two rules that need chain
-  state — outpoint exists and unspent, coinbase maturity — need the UTXO set, and
-  `CheckBlock` does not call `CheckSpendAuthorisation`, because the outputs being spent
-  are not something a block carries. The function is named for the half it does.
+- `CheckTransactionInputs` is the contextual entry point, and its rules run cheapest
+  first: reject a coinbase, check the coin count against the input count, check maturity
+  in integers, compute the fee in integers — which is where an attempt to mint is caught
+  — and verify cryptography last. Every rule above the signature check is one an
+  attacker cannot make a node pay for.
+- A block that passes `CheckBlock` is still not valid on its own: `CheckBlock` is
+  context-free and does not touch the UTXO set, because the coins being spent are not
+  something a block carries. Validity is the header checks, then `CheckBlock`, then
+  `ConnectBlock` against the set at the predecessor. Each function is named for the half
+  it does.
+
+**Unspent output set**
+
+- `amarian::utxo` — three types with one job each. `CoinsView` is the read interface, so
+  an empty set, an in-memory map and a future RocksDB column family are interchangeable
+  and consensus never sees any of them. `CoinsSink` is the write interface: one call,
+  "the truth about this outpoint is now *this*". `CoinsCache` is both, over a base view,
+  and is the only mutable UTXO set in the system.
+- **No read-through caching.** A cache holds only entries that *differ* from its base, so
+  its map is exactly the change set — no dirty flags, no `mutable`, and a flush that
+  writes precisely what changed. A read for an untouched outpoint costs a base lookup;
+  what it buys is that "what is in the map" and "what must be written" are the same
+  question, which is the property a reorganisation has to be able to trust.
+- Spending a coin the base never had erases the entry rather than leaving a tombstone.
+  Without that, a root cache would accumulate one tombstone per coin ever spent and the
+  in-memory set would grow with the chain's whole history instead of its unspent output
+  count.
+- `ConnectBlock` and `DisconnectBlock` are **atomic by nesting**: each stages every change
+  in its own cache over the caller's set and flushes only after the last rule passes. A
+  block rejected half way through leaves the set exactly as it was. There is no rollback
+  path, because not flushing is not an action — which removes the code least likely to be
+  correct and least likely to be exercised.
+- Applying transactions in order, removing each coin as it is found, is what makes
+  intra-block dependencies and intra-block double spends fall out of the mechanism rather
+  than needing separate rules. A transaction may spend an output created earlier in the
+  same block and not one created later; a second spend of one outpoint finds nothing.
+- `BlockUndo` records the full contents of every coin each non-coinbase transaction spent,
+  because connecting is not invertible from the block alone — a block names spent
+  outpoints, not their contents. It has an encoding, bounded the same way every other
+  decoder is, because a reorganisation may begin after a restart.
+- Disconnecting compares every coin it removes for **full equality** against what the
+  block says it created, not merely for presence. An approximate reversal is a silent
+  chain split: two nodes that both believe they are on the same chain, holding different
+  money, with nothing having rejected anything.
+- Provably unspendable outputs — lock version `0` — are never stored, via one `IsStored`
+  predicate that connect and disconnect both call, so "the same outputs were skipped" is a
+  fact rather than a hope. Unknown lock versions are stored normally.
+- Creating an outpoint that is already unspent is rejected even though Amarian makes it
+  unreachable by construction, because that construction is an *argument* that a future
+  change could invalidate, and the cost of being wrong is a live coin silently
+  overwritten.
+- `DisconnectError` is a separate enumeration from `ValidationError`. A failed connect is
+  an invalid block and the node carries on; a failed disconnect means the undo record and
+  the set no longer describe each other, and there is no valid continuation from that. Two
+  types make the wrong reaction unwritable.
+- The bug worth recording: `CoinsCache` is non-copyable and built only through
+  `CoinsCache::Over`, because `CoinsCache batch(coins)` silently resolved to the *copy*
+  constructor — an exact match beats the derived-to-base conversion to `const CoinsView&`
+  — producing a duplicate of the parent's change set sharing the parent's base instead of
+  a layer above it. Four tests failed; the defect was live in `ConnectBlock`, meaning a
+  rejected block could have left the real set edited. Deleting the copy operations makes
+  the mistake unwritable rather than merely documented.
 
 **Node**
 
@@ -288,11 +349,12 @@ against simulated hashrate rather than asserted.
 - [docs/DECISIONS.md](docs/DECISIONS.md) records 38 decisions with the evidence
   behind each and the condition that would reverse it.
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) enumerates attack classes with a
-  per-class *Tested* column. Nineteen individual rows now read **yes**, and the
-  spend-authorisation class went from "no verification" to fully implemented on
-  2026-09-05. That column is the input to Phase 9, whose criterion is that every row
-  has a test that fails when the defence is removed — strictly stronger than what a
-  **yes** claims today.
+  per-class *Tested* column. Twenty-five individual rows now read **yes**; the
+  spend-authorisation class went from "no verification" to fully implemented, and the
+  supply class closed its last two open rows — the coinbase fee bound and the phantom
+  fee claim — when the UTXO set landed, both on 2026-09-05. That column is the input to
+  Phase 9, whose criterion is that every row has a test that fails when the defence is
+  removed — strictly stronger than what a **yes** claims today.
 - [docs/AMARIAN_PROTOCOL.md](docs/AMARIAN_PROTOCOL.md),
   [docs/NETWORK.md](docs/NETWORK.md) and [docs/WALLET.md](docs/WALLET.md) are
   design intent for Phases 1, 4 and 5 and are labelled as such at the top.
@@ -311,36 +373,38 @@ against simulated hashrate rather than asserted.
 
 ## Current task
 
-The UTXO set with apply and revert. It is the one component every remaining Phase 1
-item is waiting on, and it is what turns the two rules `consensus/validation.hpp` still
-names as absent into rules that can be enforced: that an input's outpoint exists and is
-unspent, and that a coinbase output has matured. It also supplies the argument
-`CheckSpendAuthorisation` and `TransactionFee` already take — the outputs being spent —
-so those functions do not change when it arrives, which was the point of giving them
-that shape.
+The block index and chain selection. With the unspent output set in place, every rule
+that consults a coin is enforced — but nothing yet decides *which* block to apply:
+`ConnectBlock` is handed a block and a height by a caller, and a caller that chooses
+wrongly is not something any rule below it can detect. The block index is what turns a
+pile of validated blocks into a chain: the tree of known headers, accumulated work per
+branch, a total order with deterministic tie-breaking, and the reorganisation walk that
+disconnects back to a fork point and connects forward along the new branch.
 
-The `Coin` type carries the output, the height it was created at and whether it came
-from a coinbase, because maturity and the reward schedule both need the height and
-neither can get it from the output itself. Revert has to be exact rather than
-approximate: a reorganisation that restores a slightly different UTXO set than it
-removed is a chain split with no error message.
+That last part is the reason the UTXO layer was built with an exact, atomic reversal
+rather than an approximate one. A reorganisation is where `DisconnectBlock` is called for
+real, and where "restores exactly what was removed" stops being a test assertion and
+becomes the thing standing between two nodes agreeing and two nodes silently disagreeing.
 
-Acceptance criterion for the phase as a whole: **two local nodes independently
-validate the same chain.** The component checklist above is the honest measure of
-distance from it.
+Chain selection is also the row [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) marks
+"reorganisation without hashrate — this is the actual bug to hunt", and it is the only
+Critical row in the proof-of-work class that is a software defect rather than an economic
+property.
 
 ## Next task
 
-The block index and chain selection, then RocksDB chainstate persistence, then node
-wiring and the two-node integration test.
+RocksDB chainstate persistence — a `CoinsView` over storage, blocks and undo records on
+disk — then node wiring and the two-node integration test that closes Phase 1. The view
+interface was shaped for this: a storage-backed view is a new `CoinsView` subclass and
+nothing above it changes.
 
 After that, Phase 2 — hard-cap monetary system, with the acceptance criterion that
-invalid inflation attempts are rejected. The supply schedule is already designed and
-analysed in [docs/ECONOMICS.md](docs/ECONOMICS.md); `CheckCoinbaseAmount` already
-enforces the cap given a fee total, and `TransactionFee` already computes a single
-transaction's fee from the outputs it spends. Phase 2 is where those two meet — the fee
-total summed across a block from the UTXO set rather than passed in as a parameter — and
-where the whole thing is adversarially tested.
+invalid inflation attempts are rejected. The supply schedule is designed and analysed in
+[docs/ECONOMICS.md](docs/ECONOMICS.md), and the two halves that had to meet now have:
+`ConnectBlock` sums each transaction's fee from the coins it actually spent and hands the
+total to `CheckCoinbaseAmount`, so the cap is enforced per block from height with no
+running total to trust. Phase 2 is where that is adversarially tested rather than merely
+exercised.
 
 ## Blockers
 
@@ -362,15 +426,15 @@ None.
 
 Recorded from actual runs, 2026-09-05, 12 × 2.5 GHz x86-64.
 
-Full preset matrix, re-run after the consensus layer landed:
+Full preset matrix, re-run after the unspent output set landed:
 
 | preset | compiler | configuration | result |
 |---|---|---|---|
-| `dev` | GCC 15.2.0 | RelWithDebInfo | 202/202 passed |
-| `debug` | GCC 15.2.0 | `-O0 -g` | 202/202 passed |
-| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 202/202 passed |
-| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 202/202 passed |
-| `tsan` | Clang 21.1.8 | TSan | 202/202 passed |
+| `dev` | GCC 15.2.0 | RelWithDebInfo | 221/221 passed |
+| `debug` | GCC 15.2.0 | `-O0 -g` | 221/221 passed |
+| `clang-dev` | Clang 21.1.8 | RelWithDebInfo | 221/221 passed |
+| `asan` | Clang 21.1.8 | ASan + UBSan, integer findings fatal | 221/221 passed |
+| `tsan` | Clang 21.1.8 | TSan | 221/221 passed |
 | `release` | GCC 15.2.0 | Release | builds |
 | `bench` / `bench-clang` | GCC / Clang | Release + hardening | build |
 | `fuzz` | Clang 21.1.8 | libFuzzer + ASan/UBSan | all six executables build |
@@ -380,8 +444,8 @@ Zero compiler warnings on every one of the nine, with `-Werror` on. Reproduced b
 preset, counts `warning:` lines and reports the pass line, so the table above is a
 transcript rather than a recollection.
 
-The 202 are 72 `test_util`, 66 `test_primitives`, 44 `test_consensus`, 15
-`test_crypto` and 5 `test_version`, counted with `--gtest_list_tests` by
+The 221 are 72 `test_util`, 66 `test_primitives`, 44 `test_consensus`, 19 `test_utxo`,
+15 `test_crypto` and 5 `test_version`, counted with `--gtest_list_tests` by
 [scripts/count_tests.sh](scripts/count_tests.sh) rather than estimated.
 
 Genesis, verified end to end rather than asserted: `amarian-genesis --check` reports
@@ -442,9 +506,24 @@ consensus code.
 
 ## Architectural decisions
 
-Recorded with dates and reasoning in [docs/DECISIONS.md](docs/DECISIONS.md), now 38
-entries. Three are summarised here because they changed the build or the fuzzing
-evidence:
+Recorded with dates and reasoning in [docs/DECISIONS.md](docs/DECISIONS.md), now 47
+entries. Four are summarised here because they changed the build, the fuzzing
+evidence, or a correctness guarantee that a test alone would not have caught:
+
+**A coins cache silently resolved to its copy constructor.** `CoinsCache` derives from
+`CoinsView` and originally took `explicit CoinsCache(const CoinsView& base)`. The
+expression `CoinsCache batch(coins)` where `coins` is itself a `CoinsCache` therefore did
+not call that constructor: the implicit copy constructor is an exact match and beats the
+derived-to-base conversion. The result was a duplicate of the parent's change set sharing
+the parent's base rather than a layer above it — so tombstones the batch needed were
+erased instead of created, and flushing wrote the parent's own entries back over the
+parent while losing the batch's. Four tests failed and were traced by hand against that
+prediction before anything was changed. The defect was live in `ConnectBlock` and
+`DisconnectBlock`, which is to say a rejected block could have left the node's real UTXO
+set edited. Fixed by making the constructor private behind
+`[[nodiscard]] static CoinsCache Over(const CoinsView&)` and deleting copy and move, so
+the mistake cannot be written rather than merely being documented. Full entry: decision
+42.
 
 **UBSan integer findings were recoverable, so they were decorative.** The first fuzzing
 session printed `charconv:531:66: runtime error: implicit conversion from type 'char' of

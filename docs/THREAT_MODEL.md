@@ -15,18 +15,20 @@ stop. This one is meant to be the input to
 that every class listed here has a regression test that fails if the defence is
 removed.
 
-**Updated 2026-09-05**, part way through Phase 1: nineteen rows now read **yes**.
-The spend-authorisation class is the one that changed most, and it changed because
-signature verification is now wired into consensus: `CheckSpendAuthorisation` checks
-the lock commitment, walks the threshold, and calls `crypto::Verify`, and the tests
-that cover it use real ML-DSA-44 signatures rather than stubs. Every row in that
-class now reads **yes** or **partial**, where before Phase 1's authorisation work
-landed they read **no**.
+**Updated 2026-09-05**, part way through Phase 1: twenty-five rows now read **yes**.
+The supply class is the one that changed most in this revision, and it changed because
+the unspent output set exists. The two rows that could not previously be closed — the
+coinbase fee bound and the phantom fee claim — are closed by `ConnectBlock`, which sums
+each transaction's fee from the coins it actually spent and hands the total to
+`CheckCoinbaseAmount`; coinbase maturity is enforced from the height stored on each coin;
+and two rows were *added*, for spending a coin that does not exist and for spending one
+coin twice, because until there was a set to consult neither attack had a defence to
+describe. The spend-authorisation class was the previous revision's change, and it remains
+the class where every row reads **yes** or **partial**.
 
-Nothing in the proof-of-work or network classes reads **yes**, and one row in the
-supply class still cannot: the coinbase fee bound needs a total summed across a
-block's transactions, and supplying the outputs those transactions spend is the UTXO
-set's job, which is the next component. The context-free validation rules
+Nothing in the proof-of-work or network classes reads **yes**. The supply class is now
+complete apart from the `sequence == height` rule, which is implemented and exercised only
+indirectly. The context-free validation rules
 ([src/consensus/validation.cpp](../src/consensus/validation.cpp)) are marked
 **implemented, untested** where they defend a row and nothing exercises them; that is
 a weaker claim than **yes** deliberately, because a rule nothing exercises is a rule
@@ -110,14 +112,16 @@ the defence is implemented; **Tested** is the current honest state.
 
 | Attack | Mechanism | Defence | Phase | Tested |
 |---|---|---|---|---|
-| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 1, 2 | implemented, untested — `CheckCoinbaseAmount`. The reward half is complete and derived from height alone. The fee half is now computable — `TransactionFee` derives a transaction's fee from the outputs it spends and is tested — but nothing yet sums it across a block, because that needs the UTXO set to supply those outputs |
-| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | partial — structurally guaranteed in that no block field carries a fee total for a node to trust, and `TransactionFee` is the only function that produces one, from spent outputs and paid outputs alone. Untested at block level, which needs the UTXO set |
+| Coinbase over-claim | Coinbase output exceeds the scheduled reward | Reward recomputed from height by every node; coinbase ≤ reward + fees actually paid | 1, 2 | **yes** — `ConnectBlock.ACoinbaseMayClaimTheRewardPlusTheFeesTheBlockActuallyPaid`, which rejects a coinbase claiming one facet above reward + fees and accepts the exact figure, so the boundary is checked rather than assumed. Both halves are now real: the reward is derived from height alone, and the fee total is summed by `ConnectBlock` from the coins each transaction actually spent |
+| Phantom fee claim | Coinbase claims fees no transaction paid | Fees derived from the block's own transactions, never from a field in the block | 2 | **yes** — the same test. Structurally, no block field carries a fee total for a node to trust; the only value `CheckCoinbaseAmount` accepts is the one `ConnectBlock` accumulated from `TransactionFee` over spent coins, and a block whose transactions pay no fees cannot claim any |
 | Outputs exceed inputs | A transaction mints value directly | Per-transaction sum check, on integers | 2 | **yes** — `Validation.ATransactionMayNotPayOutMoreThanItSpends` and `.TheFeeIsWhatIsSpentMinusWhatIsPaid`. `TransactionFee` rejects any transaction paying out more than it spends; *finding* the outputs it spends is the UTXO set's job and is separate from this rule |
 | Overflow to a small positive | Amounts chosen so an addition wraps | Every amount bounded to `[0, MAX_MONEY]` *before* summing, plus `CheckedAdd`; `-fwrapv` so a missed check is defined behaviour rather than an optimiser licence | 1, 2 | **yes** on both sides — `Validation.AmountsOutsideTheMoneyRangeAreRejectedOnBothSides` and `TransactionPrimitive.OutputAmountIsRangeCheckedAtTheWholeTransactionLevel`. Both running totals are re-checked against the money range at every step, so a sum that leaves it is rejected at the addition that took it out rather than after wrapping |
 | Negative amount | A signed amount below zero | Amounts are validated on deserialisation, not at point of use | 1, 2 | **yes** — `TransactionPrimitive.OutputAmountIsRangeCheckedAtTheWholeTransactionLevel`. No code path in the node can hold a `TxOutput` outside `[0, MAX_MONEY]`, and `CheckTransaction` re-checks so that a transaction built in memory gets the same verdict as one parsed off the wire |
 | Duplicate coinbase | Two coinbase transactions in one block | Exactly one, at index 0 | 1 | implemented, untested — `CheckBlock` rejects a block whose first transaction is not a coinbase and one that contains a second |
-| Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | no — needs the UTXO set to know which height a coin was created at |
-| Duplicate transaction id | Re-mining an existing txid to overwrite or resurrect a UTXO (BIP-30 / BIP-34 class) | Height committed in the header and required to equal the coinbase input's `sequence`, which is inside the txid preimage, so identical coinbases across heights are impossible by construction | 1 | implemented, untested — the `sequence == height` rule is in `CheckBlock` |
+| Premature coinbase spend | Spending a reward before maturity | 200-block maturity checked against the spending block's height | 2 | **yes** — `ConnectBlock.ACoinbaseOutputCannotBeSpentUntilItHasMatured`, which rejects the spend one block early and accepts it at exactly `H + coinbase_maturity`. The creation height and coinbase flag travel on the stored `Coin`, so the rule needs neither the creating block nor a second lookup |
+| Spend of a coin that does not exist | An input naming an outpoint that was never created, or was created on an abandoned branch | Every input resolved against the UTXO set before any arithmetic; absence and prior spend are indistinguishable and both fatal | 1 | **yes** — `ConnectBlock.AnInputThatIsNotInTheSetIsRejectedAndTheSetIsUntouched`, which also pins the atomicity half: the coinbase's outputs were already staged when the spend failed, and none of them reached the node's set |
+| Double spend of one coin | The same outpoint consumed twice, in one block or across two | Within a block, the coin is removed as it is found, so the second attempt resolves nothing — there is no state in which it is still present; across blocks, the first spend left the set without it | 1 | **yes** — `ConnectBlock.ATransactionMaySpendAnOutputCreatedEarlierInTheSameBlockButNotLater` for the ordering half and the removal-as-found mechanism, on top of `CheckBlock`'s context-free duplicate-outpoint scan. The two defences are independent: one is a scan of the block, the other is the set refusing to answer twice |
+| Duplicate transaction id | Re-mining an existing txid to overwrite or resurrect a UTXO (BIP-30 / BIP-34 class) | Height committed in the header and required to equal the coinbase input's `sequence`, which is inside the txid preimage, so identical coinbases across heights are impossible by construction — *and* creating an outpoint that is already unspent is rejected regardless | 1 | **yes** — `ConnectBlock.CreatingAnOutpointThatIsAlreadyUnspentIsRejected`, and `CoinsCache.AddingOverALiveCoinFailsAndChangesNothing` at the container level. Amarian needs no activated rule and no exception height for this; the invariant is enforced anyway, because the construction argument depends on facts a future change could alter and the cost of being wrong is a live coin silently overwritten. `CoinsCache.ACoinRecreatedAtAnOutpointItAlreadyOccupiedIsAllowedOnceSpent` pins that the rule is about *live* coins. The `sequence == height` rule itself remains implemented, untested in `CheckBlock` |
 | Tail emission added later | A "temporary" subsidy to fund security | Not a code defence. The cap is enforced per-block from height, so adding one is a hard fork that every node must accept — the social defence is that it is impossible to do quietly | — | n/a |
 
 The last row is not padding. Most supply failures in practice are not exploits;
@@ -176,6 +180,8 @@ which chain.
 | Signed overflow | Undefined behaviour lets the optimiser delete the check | `-fwrapv`, plus checked arithmetic that returns `std::optional` so an overflowed value cannot be read unknowingly |
 | Compiler or optimisation level | The same source produces different behaviour | Every rule is a pure function of committed data. Verified in practice by building the full matrix under GCC and Clang, Debug and Release, with sanitizers |
 | Platform integer width or endianness | Serialisation differs by host | Fixed-width types and explicit little-endian encoding; two byte orders in `Hash256` separated in the type's API so they cannot be confused |
+| Inexact state reversal | A node that reorganised arrives at a different UTXO set from one that synced the same chain directly — both believe they are on the same chain while holding different money, and neither has rejected anything | Undo data records the full contents of every coin a block spent, and disconnecting compares every coin it removes for **full equality** against what the block says it created rather than merely for presence. Pinned by `DisconnectBlock.RestoresTheSetExactlyAsItWas` and `.AStoredCoinIsComparedInFullRatherThanForPresenceAlone` |
+| Partially applied block | A block rejected half way through leaves the set edited, so the node's state depends on *which rule* rejected it | Every change is staged in a layer over the node's set and committed only after the last rule passes. Not flushing is not an action, so there is no rollback path to get wrong. Pinned by `ConnectBlock.AnInputThatIsNotInTheSetIsRejectedAndTheSetIsUntouched` and the change-count assertions in `utxo_coins_test.cpp` |
 | Storage or cache state | A validation outcome depends on what is cached | Structural: consensus does not link storage. Enforced by the build, not by review |
 | Network state | An outcome depends on which peer answered first | Structural: consensus does not link networking |
 
@@ -363,9 +369,9 @@ false is a security report, and a valuable one.
 
 | Class | Defence designed | Defence implemented | Regression test |
 |---|---|---|---|
-| Supply integrity | yes | the per-amount bound, the coinbase, height and output-sum rules, and the per-transaction fee rule | three rows: the amount bound, both summing sides, and outputs-exceed-inputs |
+| Supply integrity | yes | the per-amount bound, the coinbase, height and output-sum rules, the per-transaction fee rule, and now the block-level rules — coinbase ≤ reward + fees actually paid, coinbase maturity, input existence and the duplicate-outpoint invariant | nine rows: the amount bound, both summing sides, outputs-exceed-inputs, the coinbase bound, phantom fees, maturity, missing inputs and double spends |
 | Spend authorisation | yes | structure, identity, and verification — the lock commitment, the threshold walk and `crypto::Verify` | ten rows, on identity, the sighash commitments, the commitment check and the threshold |
-| Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers, canonical encoding | encoding rows only |
+| Determinism | yes, and partly structural | partly — layering, checked arithmetic, `-fwrapv`, sanitizers, canonical encoding, and atomic-plus-exact state transitions | encoding rows, plus the reversal and atomicity rows |
 | Proof of work and chain selection | yes | the target codec and the per-header work check; no chain selection | one row on the Merkle construction, plus the target codec |
 | Resource exhaustion | yes | the deserialisation rows, the weight limit, the linear sighash and the bounded threshold walk | four rows, one of them fuzzed |
 | Network layer | outline only | no | no |
@@ -386,17 +392,20 @@ hashing checked against published vectors; the transaction primitives with the
 txid/wtxid split and the Merkle construction; three fuzz harnesses, the widest of
 which covers the deserialisation perimeter itself; the context-free validation
 rules; the signature scheme registry over libsecp256k1 and OpenSSL with the startup
-gate that refuses to run a build missing one; the fixed-size signature hash; and
+gate that refuses to run a build missing one; the fixed-size signature hash;
 spend authorisation itself — the lock commitment, the ordered threshold walk against
-real signatures, and the rule that a transaction cannot pay out more than it spends.
+real signatures, and the rule that a transaction cannot pay out more than it spends;
+and the unspent output set, with atomic connect and disconnect, an undo record that is
+compared for full equality on reversal, and the block-level supply bound that needed it.
 
-What does not exist: any rule that needs to consult *state*. No input's existence is
-established, no chain is selected. Signatures are now verified and inputs are summed,
-but against outputs a caller supplies rather than ones a node looked up: nothing in
-the tree can yet answer "does this input exist, and is it still unspent", or "was
-this coinbase output created 200 blocks ago", because both questions need the UTXO
-set. Everything in the network and wallet classes, and the block-level half of the
-supply class, is therefore still a plan, and the rows say so.
+What does not exist: any rule that decides *which* state to be in. A block can now be
+applied to a set and taken back off again, and every rule that consults a coin is
+enforced — input existence, maturity, the fee total, the duplicate-outpoint invariant.
+What is missing is the chain: nothing yet decides which block to apply, so
+`ConnectBlock` is handed a block and a height by a caller. No block index exists, no
+accumulated-work comparison, no persistence — so a node cannot yet disagree with a peer
+about a tip, because it does not have one. Everything in the network and wallet classes
+is therefore still a plan, and the rows say so.
 
 [Phase 9](ROADMAP.md#phase-9--security-engineering) is where every row above
 acquires a test that fails when the defence is removed — a stronger property than

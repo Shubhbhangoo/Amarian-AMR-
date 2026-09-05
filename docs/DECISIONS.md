@@ -622,6 +622,9 @@ load-bearing for soft-fork safety. `Malformed` could be merged into `Invalid` if
 ### 36. Spend authorisation takes the spent outputs as a span, not a UTXO handle
 
 **Implemented, 2026-09-05**, in [src/consensus/validation.cpp](../src/consensus/validation.cpp).
+**Amended by decision 40**, which changed the element type from `TxOutput` to `Coin` when
+coinbase maturity needed a per-coin creation height. The reasoning below is unchanged and is
+why the amendment was a one-line type change rather than a redesign.
 
 `CheckSpendAuthorisation(tx, std::span<const TxOutput> spent_outputs, params)` and
 `TransactionFee(tx, spent_outputs)` are handed the outputs being spent. They do not look
@@ -714,6 +717,297 @@ Bitcoin behaves the same way for the same reason.
 verification failures *and* whose keys are validated when the lock is created rather than
 when it is spent. Neither is true of any registered scheme, since a commitment hides the
 key until it is revealed.
+
+## State
+
+### 39. A coin is a primitive with a canonical encoding, not a UTXO-layer detail
+
+**Implemented, 2026-09-05**, in [include/amarian/primitives/coin.hpp](../include/amarian/primitives/coin.hpp).
+
+`Coin` is `{TxOutput output; uint32_t height; bool is_coinbase;}` and lives in
+`amarian::primitives`, one layer *below* the UTXO set that stores it.
+
+The alternative — declaring it inside `amarian::utxo`, where it is used — was rejected
+because a coin has an encoding, and an encoding is a consensus artefact. Two things that do
+not exist yet will need to agree on it byte for byte: a UTXO set hash, so a node can state
+in one 32-byte value which set it holds, and any signed or shared snapshot that lets a new
+node start from a committed set rather than from height zero. Both are consensus-visible,
+and neither may depend on how a particular node happens to store its database. Putting the
+type where the codec lives keeps the byte layout reviewable next to every other encoding
+instead of buried in a storage layer.
+
+`height` and `is_coinbase` are on the coin rather than looked up per spend because they are
+properties of the coin's *creation*, and after a reorganisation the block that created it
+may no longer be reachable. A rule that needed to consult that block would be a rule that
+cannot be evaluated at the moment it matters.
+
+**Consequence:** coinbase maturity is decidable from the coin alone, which is what made
+decision 40 possible.
+
+**Reversed if:** nothing plausible. The type is 3 fields wide and its encoding is fixed by
+the same codec as everything else.
+
+### 40. Spend authorisation takes a span of coins, amending decision 36
+
+**Implemented, 2026-09-05**, in [src/consensus/validation.cpp](../src/consensus/validation.cpp).
+
+`CheckSpendAuthorisation` and `TransactionFee` now take `std::span<const Coin>` where
+decision 36 gave them `std::span<const TxOutput>`. The substance of 36 is unchanged: they
+are handed values, they perform no lookup, and they still do not know what a database is.
+
+The change was forced by coinbase maturity, which needs each spent coin's creation height —
+information a `TxOutput` does not carry and cannot be given without inventing a parallel
+array. Building a `std::vector<TxOutput>` per transaction to preserve the old signature was
+considered and rejected: it would have copied every output of every input of every
+transaction during a sync to avoid touching a parameter type, and a copy that exists only to
+keep a signature is the kind of workaround that turns into architecture.
+
+`CheckTransactionInputs(tx, spent, spend_height, params)` is the new entry point and orders
+its rules cheapest first: reject a coinbase outright, check the span length against the
+input count, check maturity in integers, compute the fee in integers — which is where a
+transaction that tries to mint is caught — and verify cryptography last. Ordering is not
+cosmetic here. Every rule above the signature check is a rule an attacker cannot make a node
+pay for, and signature verification is by far the most expensive thing a node does.
+
+**Consequence:** the layer boundary held. Consensus gained a per-coin height without gaining
+a dependency on storage; `amarian::consensus` still links nothing but `primitives`.
+
+**Reversed if:** a rule appears that needs the whole set rather than the coins one
+transaction names. Duplicate-outpoint creation is such a rule, and it is deliberately in the
+UTXO layer (decision 46) rather than pushed into this signature.
+
+### 41. A cache holds only its change set — no read-through, no unnecessary tombstone
+
+**Implemented, 2026-09-05**, in [src/utxo/coins.cpp](../src/utxo/coins.cpp).
+
+`CoinsCache` stores an entry only for an outpoint whose truth *differs* from its base view.
+A read for an untouched outpoint goes to the base every time, and is not remembered.
+
+That costs a lookup a read-through cache would have saved. It buys a property worth more
+than the lookup: "what is in the map" and "what must be written" are the same question. No
+dirty flags, no `mutable` members, no distinction between a cached clean entry and a pending
+change — so a flush writes precisely what changed, and a cache that is abandoned is provably
+free of consequences. This is the property a reorganisation has to be able to trust, and the
+one Bitcoin Core's equivalent spends real complexity to maintain alongside its caching.
+
+The same reasoning produces the tombstone rule. Spending a coin the base holds *must* leave
+a `std::nullopt` entry, or a later read would fall through and find the coin again. Spending
+a coin the base never had — one this layer created, or any coin at all when the base is the
+empty view — erases the entry outright instead. Without that distinction a root cache would
+accumulate one tombstone per coin ever spent, and the node's in-memory set would grow with
+the chain's entire history rather than with its unspent output count.
+
+**Consequence:** `ChangeCount()` is a meaningful number, and the tests assert on it. Several
+of them would pass under a leaky implementation if they only checked coin presence.
+
+**Reversed if:** profiling on a real chain shows base lookups dominating. The fix would be a
+separate read-through layer *below* the change set, not a dirty flag inside it.
+
+### 42. A coins cache cannot be copied, and layering one is a named operation
+
+**Implemented, 2026-09-05**, in [include/amarian/utxo/coins.hpp](../include/amarian/utxo/coins.hpp).
+
+`CoinsCache` has a private constructor, deleted copy and move operations, and one way to
+build one: `CoinsCache::Over(base)`. This is recorded because it was not a stylistic
+preference — it is a bug that was written, shipped into the first test run, and diagnosed.
+
+The natural spelling was `explicit CoinsCache(const CoinsView& base)`, used as
+`CoinsCache batch(coins)`. Because `CoinsCache` *derives* from `CoinsView`, and because a
+cache over a cache is the normal case here — a block's batch over the node's set — that
+expression does not call the constructor it appears to call. An implicitly-declared
+`CoinsCache(const CoinsCache&)` is an exact match; the reference constructor requires a
+derived-to-base conversion; overload resolution takes the exact match. The result is a
+*duplicate of the parent's change set sharing the parent's base*, not a layer above it.
+
+Both spellings compile, both look right, and the second one silently destroys atomicity. The
+duplicate's `MarkSpent` consults the grandparent view, so tombstones the batch needed were
+erased instead of created; and flushing it wrote the parent's own entries back over the
+parent while losing the batch's. Four tests failed, and the failures were traced by hand
+against that prediction before anything was changed — every observed count matched. The same
+defect was live in `ConnectBlock` and `DisconnectBlock`, which is to say a rejected block
+could have left the node's real UTXO set edited.
+
+Deleting the copy operations makes the mistake unwritable rather than merely documented, and
+the named factory makes the intent explicit at every one of the ~25 construction sites.
+`Over` returns by value with both copy and move deleted, which C++17's guaranteed copy
+elision permits: the prvalue initialises the destination directly.
+
+**Consequence:** the general rule this is a case of — a type that both derives from an
+interface and takes that interface as a constructor parameter has an ambiguity a reader
+cannot see — applies to any future view layer. Storage-backed views should follow the same
+shape.
+
+**Reversed if:** never. There is no case in this system where duplicating a change set apart
+from its base is a meaningful operation.
+
+### 43. Connecting and disconnecting a block are atomic, by nesting rather than by rollback
+
+**Implemented, 2026-09-05**, in [src/utxo/connect.cpp](../src/utxo/connect.cpp).
+
+Both operations build their own `CoinsCache` over the caller's set, make every change in it,
+and flush only after the last rule has passed. A block rejected half way through therefore
+leaves the caller's set exactly as it was — not repaired, but never edited.
+
+The alternative is an undo log applied on failure, which is the same idea with a failure mode:
+the rollback path is code that runs only when something has already gone wrong, so it is the
+code least likely to be correct and least likely to be exercised. Nesting has no failure path
+at all. Not flushing is not an action.
+
+The cost is one hash map per block. Measured against the signature verification the same block
+requires — ML-DSA-44 verification per input, thousands of inputs — it is not a number worth
+optimising, and it removes the entire class of bug where a rejected block has already changed
+the state.
+
+This is also what makes intra-block dependencies work rather than merely tolerable. Each
+transaction's outputs enter the batch before the next transaction is examined, so a
+transaction may spend an output created earlier in the same block and may not spend one
+created later. **Within a block, transactions must be topologically ordered** — and that is
+not a separate check anywhere in the code. It is what applying the block in order *means*, and
+a block that violates it is rejected with `TxInputMissingOrSpent`, because at the moment the
+spend is examined the coin genuinely does not exist. Removing each coin as it is found is also
+what makes a double spend *within* a block impossible here as well as in `CheckBlock`: the
+second attempt finds nothing.
+
+**Consequence:** `ConnectBlock` deliberately does not re-run `CheckBlock` or the header
+checks. They are documented preconditions, because re-running them would re-serialise and
+re-hash every transaction of every block during a sync to re-derive an answer the caller
+already holds. The cheap bounds that *memory safety* depends on — a non-empty transaction
+list, a coinbase in position zero, no second coinbase — are re-checked anyway, which is the
+same line decision 36 draws.
+
+**Reversed if:** a block ever needs to be applied to a set too large to layer over. It does
+not: the layer holds one block's changes, not the set.
+
+### 44. An undo record exists, and disconnecting compares every coin in full
+
+**Implemented, 2026-09-05**, in [include/amarian/utxo/connect.hpp](../include/amarian/utxo/connect.hpp).
+
+Connecting a block is not invertible from the block alone. The outputs it created are in it,
+so removing them again needs nothing else — but the coins it *spent* are not: the block names
+their outpoints, not their contents. Restoring them requires the amounts, locks, creation
+heights and coinbase flags that were removed. `BlockUndo` records exactly that, written while
+the block is connected because that is the only moment the data is in hand.
+
+`BlockUndo` therefore has an encoding, for one reason: a reorganisation may begin after a
+restart, so the undo data for every block on the active chain has to survive one. Its decoder
+is bounded the same way every other decoder in the project is — the count checked against
+`min_element_bytes` of remaining input *and* against the chain's transaction and input limits
+before anything is reserved. It holds one entry per **non-coinbase** transaction rather than a
+padded entry per transaction, because an always-empty slot is a thing to be checked instead of
+a thing that cannot happen.
+
+Disconnecting checks **full equality** on every coin it removes, not merely presence. This is
+the decision with real cost — a comparison per output of every block being disconnected — and
+it is worth it because "revert restores exactly what was removed" is the property a
+reorganisation stakes everything on. An approximate revert is a silent chain split: two nodes
+that both believe they are on the same chain, holding different money, with no rule having
+rejected anything. The alternative to comparing is trusting a database, and a corrupted
+database is precisely the condition this check exists to catch. A test pins it down by
+disconnecting a block whose header height was altered: the txid is unchanged so the outpoint
+is found, and presence alone would accept it.
+
+Transactions are walked in reverse block order, and within each one the outputs it created are
+removed before the inputs it spent are restored. That is not a stylistic mirror of connecting:
+a transaction may spend an output created earlier in the same block, so undoing forwards would
+try to remove a coin the later transaction had not yet given back.
+
+`DisconnectBlock` takes no `ChainParams`, because undoing a block enforces no rule that could
+differ between networks. It restores what was recorded and checks only that what it restores
+is what was recorded.
+
+**Consequence:** undo data is per-block state a node must persist alongside blocks. Storage
+sizing has to account for it.
+
+**Reversed if:** nothing. The alternative to an undo record is re-deriving spent coins by
+replaying the chain, which is the operation an undo record exists to avoid.
+
+### 45. A provably unspendable output is never stored
+
+**Implemented, 2026-09-05**, in `IsStored` in [src/utxo/connect.cpp](../src/utxo/connect.cpp).
+
+An output whose lock is `version == 0` — `LOCK_VERSION_UNSPENDABLE`, the reserved-and-invalid
+value the extension-point policy sets aside at every version field — is not added to the UTXO
+set. The coins are still destroyed, which is the point: this decides only whether every node
+has to remember for ever that they were.
+
+A lock nothing can ever open holds coins that are gone. Keeping the entry would mean carrying
+it in every node's set, every snapshot and every set hash in perpetuity, for an outpoint no
+transaction can ever name. Bitcoin reached the same conclusion about `OP_RETURN`, and the
+reasoning transfers exactly.
+
+The part worth recording is *how* it is implemented. Connect and disconnect must agree on this
+predicate exactly — an output one skips and the other does not is either a coin that cannot be
+removed or a coin restored from nothing. They agree because it is a single function that both
+call, which is the only way to make "the same outputs were skipped" a fact rather than a hope.
+Two copies of the same condition, however carefully written, are two things that can drift.
+
+**Consequence:** unknown lock versions are *not* covered by this and are stored normally. Only
+the one reserved value is provably dead, and treating an unrecognised version as unspendable
+would break the soft-fork extension point it exists to protect.
+
+**Reversed if:** a use appears for retrievable proof that specific coins were destroyed. It
+would belong in an index outside the UTXO set, not in the set.
+
+### 46. No duplicate-transaction rule to activate, but the invariant is enforced anyway
+
+**Implemented, 2026-09-05**, in `CoinsCache::AddCoin` and `ConnectBlock`.
+
+Creating an outpoint that is already unspent is rejected with `TxCreatesExistingOutpoint`.
+Amarian needs no equivalent of Bitcoin's BIP-30 rule, and no activation height for one, because
+the situation is unreachable by construction: a coinbase input's `sequence` must equal the
+block height, so no two coinbase transactions can share a txid, and a duplicate non-coinbase
+txid would have had to re-spend outpoints the first one already consumed — which the set
+refuses independently. Bitcoin's problem was that its coinbases had no such distinguisher and
+two pairs of identical ones actually reached the chain.
+
+The check is enforced regardless, and that is the decision. An invariant guaranteed by
+construction is guaranteed by an *argument*, and the argument depends on facts that a future
+change could quietly alter — a new coinbase format, a transaction version that computes its id
+differently. The cost of being wrong is a live coin silently overwritten: money that vanishes
+with no rule having rejected anything, and no log line to find it by. The cost of checking is a
+hash-map lookup the code performs anyway to add the coin.
+
+**Consequence:** a coin may still be recreated at an outpoint it previously occupied, provided
+that outpoint is unspent at the moment of creation. The rule is about live coins, and a test
+pins that distinction down.
+
+**Reversed if:** never. This is the check whose absence has cost other chains money.
+
+### 47. A failed disconnect is not a rejected block, and the type system says so
+
+**Implemented, 2026-09-05**, in [include/amarian/utxo/connect.hpp](../include/amarian/utxo/connect.hpp).
+
+`DisconnectBlock` returns `std::expected<void, DisconnectError>` — a separate enumeration from
+`consensus::ValidationError`, with four values of its own. Sharing one error type would have
+been less code and is the obvious thing to do, since both are "why an operation on a block
+failed".
+
+They are not the same kind of failure, and the distinction is the whole point. A block that
+fails to *connect* is invalid: it was proposed, it broke a rule, it is rejected, and the node
+carries on and is right to. A block that fails to *disconnect* was already validated and
+already applied — so a failure means the undo record and the UTXO set no longer describe each
+other. That is a corrupted database, or a caller disconnecting a block that is not the tip.
+There is no valid continuation from it, and continuing anyway means operating on a set that is
+no longer the chain's state.
+
+Sharing one enumeration would invite exactly one wrong reaction: a caller with a generic
+`if (!result) { reject_block(); continue; }` treating corrupted state as a peer's bad block,
+and carrying on with a set that has quietly diverged. Two types make that unwritable, and the
+compiler enforces it at every call site. `-Wswitch-enum` means neither `Describe` can silently
+grow a hole when an enumerator is added.
+
+**Consequence:** the node layer above must handle the two paths differently by construction —
+a rejected block is a peer's problem, a failed disconnect is the operator's. Both enumerations
+have a `Describe` returning a line a node operator can act on.
+
+**Reversed if:** never. Two failure modes demanding opposite reactions is the case type
+distinctions exist for.
+
+
+
+
+
+
 
 ## Still open
 

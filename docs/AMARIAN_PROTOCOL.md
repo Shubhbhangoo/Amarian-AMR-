@@ -1,13 +1,15 @@
 # Amarian protocol
 
-## Status: design intent, not implementation
+## Status: specification, ahead of the code in places
 
-**Nothing in this document is implemented.** It is the design that Phase 1 will
-build, written down first so that the decisions are visible and arguable before
-there is code defending them. Every structure here is subject to change until the
-Phase 1 acceptance criterion passes — two local nodes independently validating the
-same chain — after which the serialised formats are frozen, because a format change
-after that point is a hard fork.
+This document was written before the code, so that the decisions were visible and arguable
+before there was an implementation defending them. Much of it is now implemented; the rest is
+not. Exactly which is which is listed in [the gap section](#the-gap-between-this-document-and-the-code)
+at the end, and that list is updated as each component lands rather than left to rot.
+
+Every structure here is subject to change until the Phase 1 acceptance criterion passes — two
+local nodes independently validating the same chain — after which the serialised formats are
+frozen, because a format change after that point is a hard fork.
 
 Where a value is genuinely undecided it says so. Where a value is decided, the
 reason is given, because a specification that lists field widths without saying why
@@ -469,16 +471,19 @@ Amounts come before the duplicate-outpoint scan because they are arithmetic over
 already in hand, while the scan builds a hash set sized by the input count; weight is
 last because it is the only one of these that serialises the transaction.
 
-**Transaction, in context:** every input's outpoint exists and is unspent → coinbase
-maturity satisfied → the revealed `SpendCondition` hashes to the lock's commitment →
-sum of inputs ≥ sum of outputs → *then* signature verification. Signature
-verification is last because it is the only step whose cost an attacker can raise
+**Transaction, in context** (`CheckTransactionInputs`): every input's outpoint exists and
+is unspent → coinbase maturity satisfied → the revealed `SpendCondition` hashes to the
+lock's commitment → sum of inputs ≥ sum of outputs → *then* signature verification.
+Signature verification is last because it is the only step whose cost an attacker can raise
 substantially, and by that point everything cheap has already had a chance to reject.
 
 The last three of those are `CheckSpendAuthorisation` and `TransactionFee`, which take the
-outputs being spent as an explicit list rather than a database handle: finding those
-outputs is a lookup, and deciding whether they may be spent is arithmetic and
-cryptography, so the expensive half stays a pure function of values.
+coins being spent as an explicit list rather than a database handle: finding those coins is
+a lookup, and deciding whether they may be spent is arithmetic and cryptography, so the
+expensive half stays a pure function of values. A `Coin` rather than a bare output because
+maturity needs the height the coin was created at, and after a reorganisation the block that
+created it may no longer be reachable.
+
 
 **How a threshold is satisfied.** A witness's signatures are matched against its
 condition's keys by **ordered forward match**: a single key index advances monotonically
@@ -540,6 +545,71 @@ for `height` plus the fees the block's transactions actually paid.
 The last check is the supply cap, and it is worth restating that it is enforced from
 `height` by every node independently, with no running total to trust and nothing an
 operator can configure.
+
+## The unspent output set
+
+The set of unspent coins is the state a chain *is*. A block is a proposed edit to it: every
+input removes one entry, every output adds one. Two nodes that have validated the same blocks
+hold the same set, and two nodes that disagree about the set disagree about who owns what — so
+this section specifies the edit precisely.
+
+A stored entry is a **coin**: the output itself, the height of the block that created it, and
+whether that transaction was a coinbase. The last two are on the coin rather than looked up
+per spend because they are properties of its creation, and after a reorganisation the block
+that created it may not be reachable.
+
+A lookup answers "unspent, and if so what is in it". Absent means *not unspent* — either the
+outpoint never existed or it has already been spent. Consensus cannot distinguish those two
+cases and must not be able to: a set that could tell them apart would have to remember every
+coin ever spent.
+
+**Coinbase maturity.** A coin created by a coinbase transaction at height *H* may first be
+spent in a block at height *H* + `coinbase_maturity`. 200 blocks on mainnet and testnet — a
+little under 17 hours at the 300-second target — and 20 on regtest. The rule exists because a
+reorganisation destroys coinbase outputs outright: a coinbase belongs to the block that
+contains it and has no existence on a competing branch, so coins paid onward from an immature
+one would be invalidated in bulk by a reorganisation shallower than the maturity window.
+Non-coinbase coins have no such rule; they survive a reorganisation that keeps their
+transaction.
+
+**Creating an outpoint that already exists** is invalid. Amarian needs no activated rule for
+this and no exception height: a coinbase input's `sequence` equals the block height, so no two
+coinbase transactions share a txid, and a duplicate non-coinbase txid would have to re-spend
+outpoints its twin already consumed. It is nonetheless checked on every output added, because
+overwriting a live coin destroys money silently and the check costs a lookup the code performs
+anyway. An outpoint that was occupied and is now spent may be occupied again — the rule is
+about live coins.
+
+**Provably unspendable outputs are not stored.** An output whose lock version is `0`, the
+reserved-and-invalid value, can never be opened; its coins are destroyed either way, and
+keeping the entry would oblige every node to remember for ever that they were. Unknown lock
+versions are *not* covered by this and are stored normally — treating an unrecognised version
+as dead would break the extension point it exists to protect.
+
+**Order within a block.** Transactions are applied in block order, and each one's outputs
+enter the set before the next transaction is examined. A transaction may therefore spend an
+output created earlier in the same block, and may not spend one created later: **within a
+block, transactions must be topologically ordered.** This is not a separate rule with its own
+error — it is what applying the block in order means, and a violating block is rejected
+because at the moment the spend is examined the coin does not exist.
+
+**Reversal.** Every block on the active chain has an **undo record**: the coins each of its
+non-coinbase transactions spent, in input order. It is necessary because connecting is not
+invertible from the block alone — the block names the outpoints it spent, not their contents —
+and it is written while the block is connected because that is the only moment the data is in
+hand. The record is persisted, because a reorganisation may begin after a restart.
+
+Disconnecting walks the block's transactions in reverse, removing the coins each created
+before restoring the coins it spent — the mirror of connecting, and required for the same
+intra-block dependency: undoing forwards would try to remove a coin a later transaction had
+not yet given back. Every removal is checked for full equality against what the block says it
+created, not merely for presence, because "reversal restores exactly what was applied" is the
+property a reorganisation stakes everything on and an approximate reversal is a silent chain
+split.
+
+Both directions are **atomic**: all changes are staged in a layer over the node's set and
+committed only after the last rule passes. A block rejected half way through leaves the set
+exactly as it was.
 
 ## Networks
 
@@ -700,19 +770,28 @@ scheme registry over libsecp256k1 and OpenSSL, as `crypto::Verify`, with the sta
 that refuses to run a build whose OpenSSL cannot provide a scheme consensus knows; and
 spend authorisation, as `CheckSpendAuthorisation` and `TransactionFee` — the lock
 commitment, the ordered threshold walk against real signatures, and inputs covering
-outputs.
+outputs; and **the unspent output set** — the layered coins cache, the two contextual
+transaction rules that need chain state as `CheckTransactionInputs` (an input's outpoint
+exists and is unspent, and coinbase maturity), the duplicate-outpoint invariant, the pruning
+of provably unspendable outputs, and `ConnectBlock`/`DisconnectBlock` with the undo record
+and its encoding.
 
-**Specified here but not yet implemented:** the two contextual transaction rules that
-need chain state — that an input's outpoint exists and is unspent, and coinbase maturity;
-the UTXO set; the block index and chain selection; persistence; the P2P protocol; the
-wallet; and difficulty retargeting, which is Phase 3 work and deliberately not attempted
-early.
+**Specified here but not yet implemented:** the block index and chain selection; persistence,
+so the set and the undo records survive a restart; the P2P protocol; the wallet; and
+difficulty retargeting, which is Phase 3 work and deliberately not attempted early.
 
-A block that passes `CheckBlock` is therefore **not yet valid**: it has not been checked
-against the UTXO set, and `CheckBlock` does not call `CheckSpendAuthorisation`, because
-the outputs being spent are not something a block carries. The function is named for the
-half it actually does. Nothing in the code is allowed to imply otherwise until the rules
-in the paragraph above exist.
+A block that passes `CheckBlock` is therefore **still not valid on its own**: `CheckBlock` is
+context-free and does not touch the UTXO set, because the coins being spent are not something
+a block carries. Validity now means `CheckBlockHeader` and `ContextualCheckBlockHeader`, then
+`CheckBlock`, then `ConnectBlock` against the set at the predecessor — which applies
+`CheckTransactionInputs` per transaction and `CheckCoinbaseAmount` for the block. Each
+function is named for the half it actually does, and nothing in the code is allowed to imply
+that any one of them alone is enough.
+
+What is still missing before a chain exists is not a rule but a *chain*: nothing yet decides
+which block to connect, so `ConnectBlock` applies a block to a set at a height the caller
+states. That decision is the block index, and it is next.
+
 
 Where this document and the code disagree, the code is what the network runs, and the
 disagreement is a bug in one of them.

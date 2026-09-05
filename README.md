@@ -15,11 +15,13 @@ advice.
 ## Status
 
 Phase 0 of 13 is complete. Amarian is part way through **Phase 1** — the
-minimal blockchain. The data types, hashing, signature verification and the
-context-free consensus rules exist and are tested. There is no chain state yet,
-so there is still no chain.
+minimal blockchain. The data types, hashing, signature verification, the full
+consensus rule set for a transaction and a block, and the unspent output set with
+atomic application and reversal all exist and are tested. What is missing is the
+part that chooses: nothing yet decides which block to apply, so there is still no
+chain.
 
-What actually works today, verified by 202 passing tests across five presets:
+What actually works today, verified by 221 passing tests across five presets:
 
 | Component | State |
 |---|---|
@@ -27,9 +29,10 @@ What actually works today, verified by 202 passing tests across five presets:
 | `util`: byte/hash types, strict hex codec, canonical serialisation codec, checked arithmetic, logging, CLI options | working |
 | `crypto`: SHA-256, double SHA-256, tagged hashing; signature scheme registry; verification | working |
 | `primitives`: amounts, outpoints, spend conditions, locks, witnesses, transactions, blocks, Merkle tree, signature hash | working |
-| `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation | working |
+| `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation, the contextual input rules | working |
+| `utxo`: the unspent output set, atomic block application and reversal, undo records | working |
 | `amariand --version` / `--build-info` / `--help`, chain identity and backend startup gates | working |
-| UTXO set, block index, chain selection, persistence | **in progress** (Phase 1) |
+| Block index, chain selection, persistence | **in progress** (Phase 1) |
 | Mining and difficulty adjustment | **not started** (Phase 3) |
 | P2P networking | **not started** (Phase 4) |
 | Wallet | **not started** (Phase 5) |
@@ -42,7 +45,9 @@ Nothing yet *creates* such an output, so the schemes are implemented but not
 usable. See [docs/PQ_CRYPTO.md](docs/PQ_CRYPTO.md#what-is-built-and-what-is-not).
 
 `amariand` still exits non-zero and says why, rather than pretending to start a
-node: block storage and the network layer are the remainder of Phase 1. See
+node: a block index, persistence and the network layer are the remainder of Phase 1.
+A block can be validated and applied to a set today, but only by a caller that
+states which block and at what height. See
 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the current task, the next
 task, and open risks.
 
