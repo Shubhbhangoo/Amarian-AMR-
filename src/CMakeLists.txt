@@ -2,7 +2,7 @@
 #
 # The dependency order below is the architectural contract:
 #
-#   util  <-  crypto  <-  primitives  <-  consensus  <-  utxo  <-  chain
+#   util  <-  crypto  <-  primitives  <-  consensus  <-  utxo  <-  chain  <-  storage
 #                                            ^                       ^
 #                                            |                       |
 #                                    mempool / mining  ---------------+
@@ -95,6 +95,25 @@ add_library(amarian_chain STATIC
 )
 target_link_libraries(amarian_chain PUBLIC amarian::utxo)
 add_library(amarian::chain ALIAS amarian_chain)
+
+# --- storage: the state that survives a restart ------------------------------
+# The first layer permitted to link a database, and the only one. Everything below it is
+# written against the interfaces it implements — utxo::CoinsView, chain::BlockStore,
+# chain::ChainSink — so a bug in RocksDB's option handling cannot reach the code that
+# decides whether a block is valid, because that code cannot see RocksDB at all.
+#
+# amarian::rocksdb is PRIVATE, following the crypto precedent: a target linking
+# amarian::storage gets Amarian's interface and not RocksDB's headers. The pimpl in
+# chain_db.hpp is the other half of that boundary — one is the compile-time promise, the
+# other is what makes it true of the header as well.
+add_library(amarian_storage STATIC
+    storage/chain_db.cpp
+)
+target_link_libraries(amarian_storage
+    PUBLIC amarian::chain
+    PRIVATE amarian::rocksdb
+)
+add_library(amarian::storage ALIAS amarian_storage)
 
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
