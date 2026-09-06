@@ -157,6 +157,12 @@ add_library(amarian::storage ALIAS amarian_storage)
 # check that tells them apart is testable without one and belongs next to the code it guards.
 # What is left for the listener target is reading, writing, and closing.
 #
+# rpc/client.cpp is the other end of those same bytes, and it is in this target rather than one
+# of its own on purpose: the client must agree with the server about the credential's format and
+# about how a body is delimited, and the way to guarantee that is for both to be the same code.
+# A client target with its own copy of the cookie format would be a second implementation of the
+# thing that decides who may mine, and the two would drift silently.
+#
 # amarian::crypto is PRIVATE and only the cookie needs it: 32 bytes from the platform CSPRNG.
 # Naming it here rather than reaching for OpenSSL directly is what keeps `amarian::crypto` the
 # sole cryptographic boundary even when the layer that needs randomness is the top one.
@@ -167,6 +173,7 @@ add_library(amarian::storage ALIAS amarian_storage)
 # whether a block is valid. The dependency file says the same thing from the other side —
 # "JSON-RPC serialisation only (never consensus)".
 add_library(amarian_rpc STATIC
+    rpc/client.cpp
     rpc/dispatch.cpp
     rpc/http.cpp
 )
@@ -218,6 +225,22 @@ add_executable(amariand
 target_link_libraries(amariand
     PRIVATE amarian::storage amarian::mining amarian::rpc_server amarian::consensus
             amarian::util amarian::version
+)
+
+# --- amarian-cli: the client an operator actually types -----------------------
+# Links Asio directly, which is the one place besides the listener that happens, and for the
+# symmetrical reason: this is a program whose entire job is a socket. It does not link storage,
+# chain or mining — a client that could open the chainstate would be a second thing writing to
+# it, and every question it can ask is one the node answers.
+#
+# It does link amarian::rpc, and that is the point rather than an accident: the credential
+# format, the request framing and the argument rule are shared with the server instead of
+# reimplemented, so the two cannot disagree about who may mine.
+add_executable(amarian-cli
+    cli/amarian_cli.cpp
+)
+target_link_libraries(amarian-cli
+    PRIVATE amarian::rpc amarian::util amarian::version amarian::asio
 )
 
 # --- amarian-genesis: prints, checks and regenerates genesis parameters -----
