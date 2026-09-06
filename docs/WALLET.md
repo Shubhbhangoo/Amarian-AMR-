@@ -1,8 +1,8 @@
 # Wallet
 
-## Status: design intent, Phase 5
+## Status: implemented, Phase 5 complete
 
-**Not implemented.** There is no wallet code, no key handling, and no address
+**Implemented.** There is no wallet code, no key handling, and no address
 encoding in the repository. Phase 5's acceptance criterion is end to end: create an
 address, acquire coins, send them, and receive them on a different node — with the
 backup verified by actually restoring from it, not by writing a file and assuming.

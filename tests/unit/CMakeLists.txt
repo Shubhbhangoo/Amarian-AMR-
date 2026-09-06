@@ -1,4 +1,4 @@
-# The `consensus` label is carried by the three layers where a bug is a chain split:
+﻿# The `consensus` label is carried by the three layers where a bug is a chain split:
 # consensus, utxo and chain. Not primitives, util or crypto — a canonical-encoding bug is
 # just as fatal, but a gate that covers every layer is a gate that says nothing about which
 # question it answered, and those layers are what `ctest -L unit` is for.
@@ -40,6 +40,8 @@ amarian_add_test(test_consensus "unit;consensus"
     consensus_target_test.cpp
     consensus_validation_test.cpp
     consensus_work_test.cpp
+    consensus_regression_test.cpp
+    consensus_scheme_lifecycle_test.cpp
 )
 # OpenSSL for the same reason test_crypto links it, and only for that reason: the spend
 # authorisation rules cannot be tested against anything but real signatures, and the node
@@ -78,12 +80,43 @@ target_link_libraries(test_mining PRIVATE amarian::mining)
 # this node to do, and a node that mishandles a request has mishandled its own operator. It
 # links only amarian::rpc — the chain, mempool and mining it needs arrive through that
 # target's PUBLIC edges, which is the layering claim being exercised as much as the methods.
+#
+# The client's tests are in this binary rather than one of their own for the same reason
+# rpc/client.cpp is in amarian::rpc: the property worth asserting is that the two ends agree
+# about the bytes, and that is only checkable where both are linked.
 amarian_add_test(test_rpc unit
-    rpc_test.cpp
+    rpc_test.cpp rpc_http_screen_test.cpp rpc_client_test.cpp
 )
 target_link_libraries(test_rpc PRIVATE amarian::rpc)
+
+# The net layer tests exercise framing, protocol serialisation and the handshake state
+# machine — all pure code that sits above the socket. They link amarian::net which brings
+# Asio in privately, but the tests themselves do not open any sockets; they test the
+# message-level logic in isolation.
+amarian_add_test(test_net unit
+    net_message_test.cpp
+)
+target_link_libraries(test_net PRIVATE amarian::net)
+
+# Wallet tests: seed derivation, address encoding, coin selection, fee estimation,
+# backup/restore, and the wallet database.
+amarian_add_test(test_wallet unit
+    wallet_test.cpp
+)
+target_link_libraries(test_wallet PRIVATE amarian::wallet)
 
 amarian_add_test(test_version unit
     version_test.cpp
 )
 target_link_libraries(test_version PRIVATE amarian::version)
+# Post-quantum integration tests: ML-DSA-44 signing, verification, and spend authorisation
+amarian_add_test(test_pq unit
+    pq_transaction_test.cpp
+)
+target_link_libraries(test_pq PRIVATE amarian::wallet amarian::openssl)
+
+# Hybrid ownership tests: 2-of-2 Schnorr + ML-DSA-44
+amarian_add_test(test_hybrid unit
+    hybrid_transaction_test.cpp
+)
+target_link_libraries(test_hybrid PRIVATE amarian::wallet)

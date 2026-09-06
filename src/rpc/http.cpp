@@ -25,7 +25,7 @@ constexpr std::string_view HEADER_TERMINATOR = "\r\n\r\n";
 constexpr std::string_view LINE_TERMINATOR = "\r\n";
 
 /// ASCII lowercase, and only ASCII. `std::tolower` consults the locale, which means the same
-/// header name could compare differently on two machines with the same build â€” a property no
+/// header name could compare differently on two machines with the same build — a property no
 /// part of a protocol may have.
 [[nodiscard]] char AsciiLower(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -118,7 +118,7 @@ constexpr std::string_view LINE_TERMINATOR = "\r\n";
     const size_t colon = host.rfind(':');
     const size_t bracket = host.rfind(']');
     // A trailing `:port` is present when the last colon is outside any bracketed address and
-    // is the only colon â€” an unbracketed address with two of them is not a name accepted here
+    // is the only colon — an unbracketed address with two of them is not a name accepted here
     // anyway, and treating its last colon as a separator would silently accept `::1`.
     const bool has_port = colon != std::string_view::npos &&
                           (bracket == std::string_view::npos ? host.find(':') == colon
@@ -143,7 +143,7 @@ constexpr std::string_view LINE_TERMINATOR = "\r\n";
 }
 
 /// The reply envelope: Bitcoin Core's shape, which is what every miner and JSON-RPC client
-/// already speaks. Exactly one of `result` and `error` is non-null, always â€” a reply with
+/// already speaks. Exactly one of `result` and `error` is non-null, always — a reply with
 /// both or neither is one a client has to guess about.
 [[nodiscard]] json Envelope(const json& id, json payload, bool is_result = false) {
     json reply = json::object();
@@ -309,7 +309,7 @@ std::optional<HttpStatus> Screen(const HttpRequest& request, const AuthPolicy& p
 
     // The `Host` check, against DNS rebinding. A name the attacker controls that resolves to
     // 127.0.0.1 makes the operator's browser into a proxy for this interface, and the
-    // connection really does arrive from loopback â€” the only thing that distinguishes it is
+    // connection really does arrive from loopback — the only thing that distinguishes it is
     // the name the browser was told to ask for.
     if (CountHeader(request, "Host") != 1) {
         return HttpStatus::Forbidden;
@@ -483,7 +483,7 @@ namespace {
 /// Writes `contents` to `path` as a file only the account that created it can read.
 ///
 /// The ordering is the whole point. Permissions are narrowed while the file is still empty, so
-/// the token is never on disk under a mode another account could read â€” a file created and then
+/// the token is never on disk under a mode another account could read — a file created and then
 /// chmodded after the write has already been readable, and "briefly" is not a security
 /// property. The already-open stream is unaffected by the change, which is why the write can
 /// follow it.

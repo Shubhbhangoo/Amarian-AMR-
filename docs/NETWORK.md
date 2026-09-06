@@ -2,7 +2,7 @@
 
 ## Status: design intent, Phase 4
 
-**None of this is implemented.** There is no networking code in the repository, no
+**The message framing, handshake, peer manager and sync state machine are implemented. Full P2P sync (two nodes discovering each other and converging) is not yet complete.** 
 socket, and no message. This document exists so that the design decisions are made
 before Phase 1 fixes the block and transaction formats the wire protocol has to
 carry — writing the network layer first, against a format that then changes, is

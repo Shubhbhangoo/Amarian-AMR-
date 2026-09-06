@@ -2,6 +2,7 @@
 
 #include <amarian/chain/block_index.hpp>
 #include <amarian/consensus/issuance.hpp>
+#include <amarian/wallet/wallet_api.hpp>
 #include <amarian/consensus/params.hpp>
 #include <amarian/consensus/target.hpp>
 #include <amarian/consensus/validation.hpp>
@@ -300,7 +301,7 @@ struct TipFacts {
                 {"next_height", facts.next_height},
                 {"target_bits", facts.entry->header.target_bits},
                 {"next_target_bits", facts.next_bits},
-                {"next_target", target.has_value() ? json(ToHex(*target)) : json(nullptr)},
+                {"next_target", target.has_value() ? json(ToHex(*target)) : json()},
                 {"next_reward", BlockReward(facts.next_height, node.params->issuance)},
                 {"median_time", facts.median_time},
                 {"max_block_weight", node.params->max_block_weight},
@@ -368,7 +369,7 @@ struct TimeWindow {
                                     {"txid", tx.Txid().ToHex()},
                                     {"wtxid", wtxid.ToHex()},
                                     {"weight", tx.Weight()},
-                                    {"fee", entry != nullptr ? json(entry->fee) : json(nullptr)}});
+                                    {"fee", entry != nullptr ? json(entry->fee) : json()}});
     }
 
     const TimeWindow window = WindowFor(facts, now);
@@ -469,7 +470,7 @@ struct TimeWindow {
     }
     // Null means "this node is on your block now". Anything else is why it is not. One rule,
     // so a miner never has to guess which kind of answer it is holding.
-    return outcome->empty() ? json(nullptr) : json(std::string{*outcome});
+    return outcome->empty() ? json() : json(std::string{*outcome});
 }
 
 /// The nonce budget one generate call spends per block before giving up.
@@ -648,7 +649,7 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
                     {"reason", std::string{mempool::Describe(rejection.reason)}},
                     {"rule", rejection.rule.has_value()
                                  ? json(std::string{consensus::Describe(*rejection.rule)})
-                                 : json(nullptr)}};
+                                 : json()}};
     }
     const mempool::Entry& entry = **accepted;
     return json{{"accepted", true},
@@ -666,6 +667,111 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
     return names;
 }
 
+// --- Wallet RPC methods (implemented here, linked from wallet_rpc.cpp) ---
+
+[[nodiscard]] Result GetBalance(Node& node, const json&, int64_t) {
+    if (node.wallet == nullptr) {
+        return json{{"confirmed", 0}, {"pending", 0}, {"total", 0}};
+    }
+    const wallet::Balance balance = node.wallet->GetBalance();
+    return json{{"confirmed", balance.confirmed}, {"pending", balance.pending}, {"total", balance.Total()}};
+}
+
+[[nodiscard]] Result GetNewAddress(Node& node, const json& args, int64_t) {
+    if (node.wallet == nullptr) {
+        return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "this node has no wallet"});
+    }
+    uint32_t account_id = 0;
+    if (const json* given = Arg(args, 0, "account"); given != nullptr) {
+        const auto acct = AsUint(*given);
+        if (acct.has_value()) account_id = static_cast<uint32_t>(*acct);
+    }
+    const wallet::AddressInfo info = node.wallet->GetNewAddress(account_id);
+    return json{{"address", info.address}, {"account_id", info.account_id}, {"index", info.index}};
+}
+
+[[nodiscard]] Result SendToAddress(Node& node, const json& args, int64_t) {
+    if (node.wallet == nullptr) {
+        return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "this node has no wallet"});
+    }
+    const json* addr = Arg(args, 0, "address");
+    const json* amount = Arg(args, 1, "amount");
+    if (addr == nullptr || amount == nullptr) {
+        return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "sendtoaddress takes address and amount"});
+    }
+    const auto address = AsString(*addr);
+    if (!address.has_value()) return std::unexpected(address.error());
+    const auto amt = AsUint(*amount);
+    if (!amt.has_value()) return std::unexpected(amt.error());
+    const auto sent = node.wallet->Send(*address, static_cast<int64_t>(*amt));
+    if (!sent.has_value()) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "send failed"});
+    return json{{"txid", sent->txid.ToHex()}, {"fee", sent->fee}};
+}
+
+[[nodiscard]] Result ListTransactions(Node& node, const json&, int64_t) {
+    if (node.wallet == nullptr) return json::array();
+    const auto txs = node.wallet->ListTransactions();
+    json list = json::array();
+    for (const auto& tx : txs) {
+        list.push_back(json{{"txid", tx.txid.ToHex()}, {"height", tx.height}, {"received", tx.received}, {"sent", tx.sent}, {"fee", tx.fee}});
+    }
+    return list;
+}
+
+[[nodiscard]] Result GetBlock(Node& node, const json& args, int64_t) {
+    const json* given = Arg(args, 0, "hash");
+    if (given == nullptr) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "getblock takes a block hash"});
+    const auto bytes = AsBytes(*given);
+    if (!bytes.has_value()) return std::unexpected(bytes.error());
+    if (bytes->size() != Hash256::SIZE) return std::unexpected(Error{.code = RpcError::MalformedHex, .detail = "a block hash is 32 bytes"});
+    Hash256 hash = Hash256::FromBytes(*bytes);
+    const chain::BlockIndexEntry* entry = nullptr;
+    for (uint32_t h = 0; h <= node.state->Tip().height; ++h) {
+        const auto* at = node.state->Chain().AtHeight(h);
+        if (at != nullptr && at->hash == hash) { entry = at; break; }
+    }
+    // ChainState does not expose Find; only active chain is searched.
+    if (entry == nullptr) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "block not found"});
+    return json{{"hash", entry->hash.ToHex()}, {"height", entry->height}, {"version", entry->header.version}, {"timestamp", entry->header.timestamp}, {"target_bits", entry->header.target_bits}, {"nonce", entry->header.nonce}, {"prev_block", entry->header.prev_block.ToHex()}, {"merkle_root", entry->header.merkle_root.ToHex()}};
+}
+
+[[nodiscard]] Result GetTransaction(Node& node, const json& args, int64_t) {
+    if (node.wallet == nullptr) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "this node has no wallet"});
+    const json* given = Arg(args, 0, "txid");
+    if (given == nullptr) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "gettransaction takes a txid"});
+    const auto txid_hex = AsString(*given);
+    if (!txid_hex.has_value()) return std::unexpected(txid_hex.error());
+    const auto txid_bytes = FromHex(*txid_hex);
+    if (!txid_bytes.has_value() || txid_bytes->size() != Hash256::SIZE) return std::unexpected(Error{.code = RpcError::MalformedHex, .detail = "txid is 32 bytes hex"});
+    Hash256 txid = Hash256::FromBytes(*txid_bytes);
+    // Search through wallet transactions
+    const auto all_txs = node.wallet->ListTransactions();
+    for (const auto& stored : all_txs) {
+        if (stored.txid == txid) {
+            const uint32_t confs = stored.height >= 0 ? (node.state->Tip().height >= static_cast<uint32_t>(stored.height) ? node.state->Tip().height - static_cast<uint32_t>(stored.height) + 1 : 0) : 0;
+            return json{{"txid", stored.txid.ToHex()}, {"height", stored.height}, {"confirmations", confs}, {"received", stored.received}, {"sent", stored.sent}, {"fee", stored.fee}, {"in_wallet", true}};
+        }
+    }
+    return json{{"txid", txid.ToHex()}, {"confirmations", 0}, {"in_wallet", false}};
+}
+
+[[nodiscard]] Result GetTxOut(Node& node, const json& args, int64_t) {
+    const json* txid_arg = Arg(args, 0, "txid");
+    const json* vout_arg = Arg(args, 1, "vout");
+    if (txid_arg == nullptr || vout_arg == nullptr) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "gettxout takes txid and vout"});
+    const auto txid_hex = AsString(*txid_arg);
+    if (!txid_hex.has_value()) return std::unexpected(txid_hex.error());
+    const auto txid_bytes = FromHex(*txid_hex);
+    if (!txid_bytes.has_value() || txid_bytes->size() != Hash256::SIZE) return std::unexpected(Error{.code = RpcError::MalformedHex, .detail = "txid is 32 bytes hex"});
+    const auto vout = AsUint(*vout_arg);
+    if (!vout.has_value()) return std::unexpected(vout.error());
+    Hash256 txid = Hash256::FromBytes(*txid_bytes);
+    OutPoint outpoint{txid, static_cast<uint32_t>(*vout)};
+    const auto coin = node.state->Coins().GetCoin(outpoint);
+    if (!coin.has_value()) return json();
+    return json{{"outpoint", {{"txid", txid.ToHex()}, {"vout", *vout}}}, {"amount", coin->output.amount}, {"height", coin->height}, {"coinbase", coin->is_coinbase}, {"lock", {{"version", coin->output.lock.version}, {"program", ToHex(coin->output.lock.program)}}}};
+}
+
 /// One served method: its name, and the function that serves it.
 ///
 /// A table of function pointers rather than a chain of string comparisons in one long
@@ -677,7 +783,7 @@ struct Method {
 };
 
 /// Every method, in name order, which is the order `help` lists them in.
-constexpr std::array<Method, 10> METHODS{{
+constexpr std::array<Method, 17> METHODS{{
     {.name = "generate", .handler = Generate},
     {.name = "getblockchaininfo", .handler = GetBlockchainInfo},
     {.name = "getblockhash", .handler = GetBlockHash},
@@ -685,7 +791,14 @@ constexpr std::array<Method, 10> METHODS{{
     {.name = "getmempoolinfo", .handler = GetMempoolInfo},
     {.name = "getmininginfo", .handler = GetMiningInfo},
     {.name = "getrawmempool", .handler = GetRawMempool},
+    {.name = "getbalance", .handler = GetBalance},
+    {.name = "getblock", .handler = GetBlock},
+    {.name = "getnewaddress", .handler = GetNewAddress},
+    {.name = "gettransaction", .handler = GetTransaction},
+    {.name = "gettxout", .handler = GetTxOut},
     {.name = "help", .handler = Help},
+    {.name = "listtransactions", .handler = ListTransactions},
+    {.name = "sendtoaddress", .handler = SendToAddress},
     {.name = "sendrawtransaction", .handler = SendRawTransaction},
     {.name = "submitblock", .handler = SubmitBlock},
 }};

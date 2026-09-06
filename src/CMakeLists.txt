@@ -62,6 +62,7 @@ add_library(amarian::primitives ALIAS amarian_primitives)
 add_library(amarian_consensus STATIC
     consensus/genesis.cpp
     consensus/asert.cpp
+    consensus/scheme_lifecycle.cpp
     consensus/target.cpp
     consensus/validation.cpp
     consensus/work.cpp
@@ -122,15 +123,59 @@ add_library(amarian_mining STATIC
 target_link_libraries(amarian_mining PUBLIC amarian::chain amarian::mempool)
 add_library(amarian::mining ALIAS amarian_mining)
 
+# --- net: P2P message framing, protocol, handshake, peer management, sync ----
+# The network layer that discovers peers, exchanges messages, and synchronises the
+# chain. Asio is PRIVATE (the same boundary drawn around OpenSSL and RocksDB):
+# nothing outside amarian::net sees Asio's headers, and no other target opens a P2P
+# socket.
+#
+# Links chain and crypto (for hash-based checksums and nonce generation). Does not
+# link storage, mining, or RPC, following the architectural rule that the network
+# layer delivers bytes to the validator and manages peers but makes no validation
+# decision of its own.
+add_library(amarian_net STATIC
+    net/message.cpp
+    net/protocol.cpp
+    net/handshake.cpp
+    net/peer_manager.cpp
+    net/sync.cpp
+)
+target_link_libraries(amarian_net
+    PUBLIC amarian::chain
+    PRIVATE amarian::asio amarian::crypto
+)
+add_library(amarian::net ALIAS amarian_net)
+
+# --- wallet: seed, addresses, coin selection, signing, backup ---
+# Above the node and outside consensus: a wallet bug can lose its owner's coins,
+# but must not change what the network accepts. Links amarian::rpc for broadcasting
+# transactions and amarian::crypto for hashing (key derivation).
+add_library(amarian_wallet STATIC
+    wallet/seed.cpp
+    wallet/address.cpp
+    wallet/wallet.cpp
+    wallet/coinselection.cpp
+    wallet/fees.cpp
+    wallet/txbuilder.cpp
+    wallet/backup.cpp
+    wallet/wallet_api.cpp
+    wallet/signing.cpp
+)
+target_link_libraries(amarian_wallet
+    PUBLIC amarian::consensus
+    PRIVATE amarian::crypto amarian::primitives
+)
+add_library(amarian::wallet ALIAS amarian_wallet)
+
 # --- storage: the state that survives a restart ------------------------------
 # The first layer permitted to link a database, and the only one. Everything below it is
-# written against the interfaces it implements — utxo::CoinsView, chain::BlockStore,
-# chain::ChainSink — so a bug in RocksDB's option handling cannot reach the code that
+# written against the interfaces it implements � utxo::CoinsView, chain::BlockStore,
+# chain::ChainSink � so a bug in RocksDB's option handling cannot reach the code that
 # decides whether a block is valid, because that code cannot see RocksDB at all.
 #
 # amarian::rocksdb is PRIVATE, following the crypto precedent: a target linking
 # amarian::storage gets Amarian's interface and not RocksDB's headers. The pimpl in
-# chain_db.hpp is the other half of that boundary — one is the compile-time promise, the
+# chain_db.hpp is the other half of that boundary � one is the compile-time promise, the
 # other is what makes it true of the header as well.
 add_library(amarian_storage STATIC
     storage/chain_db.cpp
@@ -143,7 +188,7 @@ add_library(amarian::storage ALIAS amarian_storage)
 
 # --- rpc: the operations a client can ask a node to perform -------------------
 # The typed half of the JSON-RPC surface plus everything the transport decides about a
-# request — and no socket, no port and no thread. That split is the point, and it is drawn
+# request � and no socket, no port and no thread. That split is the point, and it is drawn
 # where it is because of what each half can be wrong about.
 #
 # `submitblock` must run a submitted block through exactly the validation an arriving block
@@ -170,14 +215,16 @@ add_library(amarian::storage ALIAS amarian_storage)
 # amarian::json is PUBLIC because the method results *are* `nlohmann::json` values, so a
 # caller cannot use this header without it. That is only tolerable here: rpc is a top
 # layer, nothing below it links rpc, and so no JSON type can reach the code that decides
-# whether a block is valid. The dependency file says the same thing from the other side —
+# whether a block is valid. The dependency file says the same thing from the other side �
 # "JSON-RPC serialisation only (never consensus)".
 add_library(amarian_rpc STATIC
     rpc/client.cpp
     rpc/dispatch.cpp
     rpc/http.cpp
+
 )
 target_link_libraries(amarian_rpc
+    PUBLIC amarian::wallet
     PUBLIC amarian::chain amarian::mining amarian::mempool amarian::json
     PRIVATE amarian::crypto
 )
@@ -189,7 +236,7 @@ add_library(amarian::rpc ALIAS amarian_rpc)
 # and RocksDB: a target that wanted to open its own socket would have to be given the
 # ability, and the CMake graph is where that is refused.
 #
-# amarian::asio is PRIVATE, and the pimpl in server.hpp is the other half of that promise —
+# amarian::asio is PRIVATE, and the pimpl in server.hpp is the other half of that promise �
 # one is the link-time boundary, the other keeps Asio's headers out of anything that
 # includes ours.
 add_library(amarian_rpc_server STATIC
@@ -214,23 +261,25 @@ add_library(amarian::version ALIAS amarian_version)
 # --- amariand: the node daemon ---------------------------------------------
 # Links storage and mining, which is the whole shape of what a node is today: it keeps a chain
 # on disk, it can build the next block, and it can answer a miner asking for one. It links no
-# peer-to-peer layer because there is not one yet — Phase 4 — and until then blocks move
+# peer-to-peer layer because there is not one yet � Phase 4 � and until then blocks move
 # between nodes through a flat file.
 #
 # amarian::rpc_server is the only path by which Asio reaches this binary, and it reaches it
 # PRIVATEly and through a pimpl: the daemon opens no socket of its own.
+#
+# Phase 4 adds amarian::net so the daemon can also synchronise over a socket.
 add_executable(amariand
     node/amariand.cpp
 )
 target_link_libraries(amariand
-    PRIVATE amarian::storage amarian::mining amarian::rpc_server amarian::consensus
-            amarian::util amarian::version
+    PRIVATE amarian::storage amarian::mining amarian::rpc_server amarian::net
+            amarian::consensus amarian::util amarian::version
 )
 
 # --- amarian-cli: the client an operator actually types -----------------------
 # Links Asio directly, which is the one place besides the listener that happens, and for the
 # symmetrical reason: this is a program whose entire job is a socket. It does not link storage,
-# chain or mining — a client that could open the chainstate would be a second thing writing to
+# chain or mining � a client that could open the chainstate would be a second thing writing to
 # it, and every question it can ask is one the node answers.
 #
 # It does link amarian::rpc, and that is the point rather than an accident: the credential
@@ -260,4 +309,3 @@ add_executable(amarian-retarget-sim
     tools/retarget_sim.cpp
 )
 target_link_libraries(amarian-retarget-sim PRIVATE amarian::chain)
-

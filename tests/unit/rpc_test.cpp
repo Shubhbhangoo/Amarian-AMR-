@@ -111,7 +111,7 @@ TEST(Rpc, EveryAdvertisedMethodDispatchesAndNothingElseDoes) {
     }
 
     const rpc::Result unknown =
-        rpc::Dispatch(fixture.node, "getbalance", json::array(), NOW);
+        rpc::Dispatch(fixture.node, "not_a_method", json::array(), NOW);
     ASSERT_FALSE(unknown.has_value());
     EXPECT_EQ(unknown.error().code, rpc::RpcError::UnknownMethod);
 }

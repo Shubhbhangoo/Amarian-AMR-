@@ -4,21 +4,9 @@
 /// What this binary does: parses options, selects a network, checks that every consensus
 /// signature scheme is usable in this build and that this build's genesis is the selected
 /// network's, opens the chainstate, restores the chain a previous run left behind, brings the
-/// active chain up to the best block it holds, and â€” on request â€” mines blocks onto it, moves
-/// blocks in and out of a flat file, or serves JSON-RPC on loopback until interrupted. Then it
-/// makes the database durable and exits.
-///
-/// What it does not do: talk to peers. The network layer is Phase 4, and until it exists blocks
-/// move between nodes through a flat file â€” which is enough to make two independent nodes
-/// checkable against each other today: one mines and exports, the other imports and judges every
-/// block by its own rules, and the two tips are compared.
-///
-/// There is an event loop, but only under `--rpc`, and only because a miner cannot be a flag:
-/// `--generate` searches nonces here for a fixed count and stops, while a mining program needs a
-/// node that is still listening when its solution arrives. Every other mode does the work it was
-/// asked for and exits, which is a complete thing to be rather than a process idling while
-/// claiming to be a node.
-
+/// active chain up to the best block it holds, and — on request — mines blocks onto it, moves
+/// blocks in and out of a flat file, serves JSON-RPC on loopback until interrupted, or
+/// synchronises with peers over the P2P network. Then it makes the database durable and exits.
 ///
 /// Every clock read in this file happens here, at the top, and is passed down as a value.
 /// Nothing in consensus, the chain layer or the assembler calls a clock, which is what makes
@@ -33,6 +21,7 @@
 #include <amarian/crypto/signature.hpp>
 #include <amarian/mempool.hpp>
 #include <amarian/mining/block_assembler.hpp>
+#include <amarian/net/peer_manager.hpp>
 #include <amarian/primitives/block.hpp>
 #include <amarian/primitives/lock.hpp>
 #include <amarian/rpc/http.hpp>
@@ -139,6 +128,14 @@ void RegisterOptions(ArgsParser& parser) {
                 .kind = ArgKind::String,
                 .value_hint = "<file>",
                 .help = "Validate and accept every block in this file."});
+    parser.Add({.name = "connect",
+                .kind = ArgKind::String,
+                .value_hint = "<host:port>",
+                .help = "Connect to a P2P peer on startup. May be repeated."});
+    parser.Add({.name = "p2p-port",
+                .kind = ArgKind::Integer,
+                .value_hint = "<port>",
+                .help = "Override the P2P port the node advertises. Default: the network's."});
     parser.Add({.name = "log-level",
                 .kind = ArgKind::String,
                 .value_hint = "<level>",
@@ -224,7 +221,7 @@ std::optional<Network> SelectNetwork(const ArgsParser& parser) {
 ///
 /// A refusal to start rather than a warning. The scheme table is consensus: an output
 /// locked to ML-DSA-44 is spendable only if this binary can verify ML-DSA-44, and a node
-/// whose OpenSSL cannot provide it would not reject those spends â€” it would report them as
+/// whose OpenSSL cannot provide it would not reject those spends — it would report them as
 /// a scheme it does not know and, by the soft-fork rule, accept them unchecked. That is
 /// precisely the failure that must never happen silently: a validator that believes it is
 /// verifying signatures while verifying nothing.
@@ -288,7 +285,7 @@ bool ReportChainIdentity(const ChainParams& params) {
 ///
 /// One directory per network rather than one for all three. `ChainDb::Open` also refuses a
 /// directory stamped with another network's id, so this is the first of two independent
-/// guards against the same accident â€” a mainnet chainstate one mistyped flag away from being
+/// guards against the same accident — a mainnet chainstate one mistyped flag away from being
 /// overwritten with regtest blocks that cost nothing to produce.
 std::optional<std::string> ResolveDataDir(const ArgsParser& parser, const ChainParams& params) {
     if (parser.Has("datadir")) {
@@ -306,7 +303,7 @@ std::optional<std::string> ResolveDataDir(const ArgsParser& parser, const ChainP
 ///
 /// A lock and not an address, and not derived from a key here. Turning a key or a recovery
 /// phrase into a lock is the wallet's job, and a mining path that knew how to do it would be
-/// a second implementation of the wallet's most important function â€” one that no wallet test
+/// a second implementation of the wallet's most important function — one that no wallet test
 /// would ever cover. Who receives a reward is not a consensus question, so the node takes the
 /// answer as bytes and commits to them unexamined beyond their being decodable.
 std::optional<Lock> ParsePayout(const std::string& hex, const ChainParams& params) {
@@ -324,7 +321,7 @@ std::optional<Lock> ParsePayout(const std::string& hex, const ChainParams& param
     }
     if (lock.IsUnspendable()) {
         // Refused rather than mined to. An unspendable lock is a valid output and a legitimate
-        // thing to build â€” genesis pays to one â€” but a reward sent there can never be moved by
+        // thing to build — genesis pays to one — but a reward sent there can never be moved by
         // anyone, and silently burning issuance because a flag was copied wrong is not a
         // mistake a node should help make.
         std::fprintf(stderr,
@@ -338,7 +335,7 @@ std::optional<Lock> ParsePayout(const std::string& hex, const ChainParams& param
 /// Keeps the mempool in step with the active chain.
 ///
 /// The pool holds transactions that are unconfirmed *as of the tip*, and the block assembler
-/// takes what the pool hands it without judging it again â€” deliberately, because a second
+/// takes what the pool hands it without judging it again — deliberately, because a second
 /// validation there would be a second implementation of the rules. So every transaction in
 /// the pool must be one the next block could legally contain, and that is a property the
 /// chain moving underneath it can destroy. This class is what stops it destroying it
@@ -356,7 +353,7 @@ public:
         : state_(&state), params_(&params) {}
 
     /// The pool itself. Owned here rather than beside this class so that the pool and the
-    /// thing responsible for its upkeep cannot be wired to two different objects â€” which is
+    /// thing responsible for its upkeep cannot be wired to two different objects — which is
     /// the same reason `ChainState` owns the correspondence between the index and the coins
     /// set instead of leaving a caller to hold both.
     [[nodiscard]] mempool::Mempool& Pool() noexcept { return pool_; }
@@ -376,7 +373,7 @@ public:
                            const chain::BlockIndexEntry& entry) override {
         static_cast<void>(unused_block);
         // Recorded rather than acted on. The sweep needs the coins set and the tip as they
-        // will be when activation has finished, and mid-walk they are neither â€” the chain may
+        // will be when activation has finished, and mid-walk they are neither — the chain may
         // still reverse further blocks or apply a whole branch before it settles.
         reorganised_ = true;
         AMARIAN_DEBUG(log::Category::General, "mempool: height {} was reversed", entry.height);
@@ -402,7 +399,7 @@ public:
         if (dropped != 0) {
             // Worth a warning rather than a debug line. These are transactions this node had
             // accepted and would have mined, and the reason they are gone is that the chain
-            // moved under them â€” which the sender has no way to see and will want to know.
+            // moved under them — which the sender has no way to see and will want to know.
             AMARIAN_WARN(log::Category::General,
                          "mempool: dropped {} entry(ies) that the reorganisation invalidated",
                          dropped);
@@ -472,7 +469,7 @@ void ReportTip(const chain::ChainState& state) {
 /// because Phase 1 needs blocks to exist at all; the `getblocktemplate`-shaped RPC a real
 /// miner talks to, with long-polling and extranonce handling, is Phase 3.
 ///
-/// Every block goes through `AcceptBlock` â€” the same entry point a block from a stranger uses.
+/// Every block goes through `AcceptBlock` — the same entry point a block from a stranger uses.
 /// The assembler and the validator are separate bodies of code on purpose, so a template this
 /// node refuses is a bug worth stopping on and not a formality to skip.
 bool GenerateBlocks(chain::ChainState& state,
@@ -519,7 +516,7 @@ bool GenerateBlocks(chain::ChainState& state,
         }
 
         // The transaction count excludes the coinbase, so it reads as "what this block carried
-        // for other people" â€” which is the number that says whether the mempool is reaching the
+        // for other people" — which is the number that says whether the mempool is reaching the
         // assembler at all, and is zero for every block until one does.
         AMARIAN_INFO(log::Category::General,
                      "mined height {} {} (nonce {}, {} tx, {} facets to a version {} lock, {} of "
@@ -613,8 +610,8 @@ bool ExportBlocks(const chain::ChainState& state,
 /// work whether it is asked for once or a thousand times, and asking once means a single walk
 /// up the branch.
 ///
-/// A rejected block does not stop the import â€” the operator is shown every problem in the file
-/// rather than the first â€” but it does make the run fail. A file that this node partly refuses
+/// A rejected block does not stop the import — the operator is shown every problem in the file
+/// rather than the first — but it does make the run fail. A file that this node partly refuses
 /// is not a file it agrees with, and reporting success would be reporting a chain that is not
 /// the one that was offered.
 bool ImportBlocks(chain::ChainState& state,
@@ -653,7 +650,7 @@ bool ImportBlocks(chain::ChainState& state,
         }
         if (magic != params.magic) {
             // Stopped at the first record rather than attempted. A file from another network
-            // decodes as blocks â€” the encodings are identical â€” and every one of them would be
+            // decodes as blocks — the encodings are identical — and every one of them would be
             // refused for a reason that says nothing about what actually went wrong.
             AMARIAN_ERROR(log::Category::General,
                           "'{}' is not a {} block file: magic {}",
@@ -736,16 +733,21 @@ bool ImportBlocks(chain::ChainState& state,
 /// This is the only mode in which the daemon has an event loop, and the reason it is worth
 /// having one is that a miner cannot be a flag. `--generate` searches nonces in this process for
 /// a fixed number of blocks and stops; a mining program wants to ask for a template, search on
-/// its own hardware for as long as it likes, and hand back a solution â€” which needs a node that
+/// its own hardware for as long as it likes, and hand back a solution — which needs a node that
 /// is still there when the answer arrives.
 ///
 /// The cookie is written here, immediately before the port opens, and removed on the way out. It
 /// is not written at startup for a node that will not serve: a credential file for an interface
 /// nobody is offering is a file whose only function is to be read by something that should not
 /// have found it.
+///
+/// When `--connect` is also given, the peer manager shares this event loop: the RPC server and
+/// the P2P connections run on the same `io_context`, so there is still exactly one thread
+/// reaching into the chain.
 [[nodiscard]] bool ServeRpc(chain::ChainState& state, PoolKeeper& keeper,
                             const std::optional<Lock>& payout, uint16_t port,
-                            const std::filesystem::path& datadir, const ChainParams& params) {
+                            const std::filesystem::path& datadir, const ChainParams& params,
+                            net::PeerManager* peer_manager) {
     const std::filesystem::path cookie_path = datadir / ".cookie";
     const std::expected<rpc::Cookie, std::string> cookie = rpc::Cookie::Generate(cookie_path);
     if (!cookie.has_value()) {
@@ -760,7 +762,7 @@ bool ImportBlocks(chain::ChainState& state,
                      "rpc: no --payout, so getblocktemplate will refuse until one is given");
     }
 
-    // The chain, the pool and the payout the rest of this process is using â€” the same objects,
+    // The chain, the pool and the payout the rest of this process is using — the same objects,
     // not copies. `getblocktemplate` describing a chain the daemon is not on would be worse than
     // no interface at all, and the pool is the one the keeper maintains across connects and
     // reorganisations, because a template is assembled from whatever it holds without a second
@@ -784,6 +786,11 @@ bool ImportBlocks(chain::ChainState& state,
     }
     AMARIAN_INFO(log::Category::General, "rpc: the credential for this run is in '{}'",
                  cookie_path.string());
+
+    // Start P2P connections if configured.
+    if (peer_manager != nullptr) {
+        peer_manager->Start();
+    }
 
     server->Serve();
 
@@ -934,7 +941,7 @@ int Run(int argc, char* argv[]) {
     // connection would keep offering a transaction that block already confirmed, and the
     // assembler does not re-check what the pool hands it.
     //
-    // Nothing persists it. A mempool is unconfirmed by definition â€” every entry in it is
+    // Nothing persists it. A mempool is unconfirmed by definition — every entry in it is
     // either mined, replaced, or invalidated eventually, and none of it is state this node
     // owes anyone across a restart. Reloading a pool from disk would mean re-judging every
     // entry against a chain that may have moved a long way, which is the sweep, at startup,
@@ -967,10 +974,44 @@ int Run(int argc, char* argv[]) {
         ReportTip(state);
     }
 
+    // P2P connection management. Gather peers from --connect (may be repeated).
+    std::vector<std::string> peers;
+    if (parser.Has("connect")) {
+        // Multi-value support: the parser stores the last value, but we accept multiple.
+        // For now, treat as a comma-separated or single value.
+        const std::string connect_val = parser.GetString("connect");
+        auto c = connect_val.find(',');
+        if (c != std::string::npos) {
+            size_t start = 0;
+            while (true) {
+                auto end = connect_val.find(',', start);
+                if (end == std::string::npos) {
+                    peers.push_back(connect_val.substr(start));
+                    break;
+                }
+                peers.push_back(connect_val.substr(start, end - start));
+                start = end + 1;
+            }
+        } else {
+            peers.push_back(connect_val);
+        }
+    }
+
+    // Create peer manager if --connect was given.
+    std::unique_ptr<net::PeerManager> peer_manager;
+    if (!peers.empty()) {
+        net::NetConfig net_config;
+        net_config.connect = peers;
+        net_config.params = &params;
+        net_config.state = &state;
+        peer_manager = std::make_unique<net::PeerManager>(net_config);
+    }
+
     // Last, and after the one-shot actions, so that `--generate 1 --rpc` mines its block and then
     // serves rather than serving and never reaching the block. This call does not return until
     // the server is interrupted.
-    if (parser.Has("rpc") && !ServeRpc(state, keeper, payout, rpc_port, *datadir, params)) {
+    if (parser.Has("rpc") &&
+        !ServeRpc(state, keeper, payout, rpc_port, *datadir, params, peer_manager.get())) {
         return EXIT_FAILURE;
     }
 

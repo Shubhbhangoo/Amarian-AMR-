@@ -412,7 +412,7 @@ same convention Bitcoin uses, which is why existing difficulty intuition transfe
 
 ## Difficulty
 
-**ASERT is the intent**, with parameters decided by simulation in
+**ASERT is implemented and deployed on every network except regtest**, with parameters decided by simulation in
 [Phase 3](ROADMAP.md#phase-3--mining-and-difficulty) rather than copied.
 
 The reasoning: a window-boundary retarget of the kind Bitcoin uses is what creates the
@@ -939,9 +939,7 @@ in "Block files" above, as `amariand --export-blocks` and `--import-blocks`.
 
 **Specified here but not yet implemented:** the P2P protocol; the mempool, and with it fee
 selection and any transaction in a block other than its coinbase; the wallet; and difficulty
-retargeting, which is Phase 3 work and deliberately not attempted early — a child currently
-inherits its predecessor's target, clamped to the network floor, which is a complete rule and
-the final one for regtest.
+retargeting, which is Phase 3 work: ASERT anchored at genesis, deployed on every network except regtest.
 
 A block that passes `CheckBlock` is therefore **still not valid on its own**: `CheckBlock` is
 context-free and does not touch the UTXO set, because the coins being spent are not something
