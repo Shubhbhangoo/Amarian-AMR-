@@ -7,13 +7,13 @@
 ///
 ///   - **activation_height**: the first block at which this scheme may be used
 ///     to create new locks. Before this height, an unknown scheme is treated as
-///     spendable (soft-fork rule) — no node creates outputs under it.
+///     spendable (soft-fork rule) - no node creates outputs under it.
 ///   - **deprecation_height**: the first block at which using this scheme for
 ///     *new* locks is discouraged (relay policy refuses, but consensus still
 ///     accepts spends). Existing UTXOs remain spendable.
 ///   - **retirement_height**: the first block at which this scheme is no longer
 ///     accepted for new locks at all (consensus refuses to create outputs).
-///     Existing UTXOs remain spendable forever — retirement never invalidates
+///     Existing UTXOs remain spendable forever - retirement never invalidates
 ///     an existing coin.
 ///
 /// ## Emergency migration
@@ -46,7 +46,7 @@ enum class SchemeState : uint8_t {
     /// still accepts spends of existing UTXOs.
     Deprecated,
     /// Retired. New outputs are refused by consensus. Existing UTXOs remain
-    /// spendable forever — retirement never confiscates coins.
+    /// spendable forever - retirement never confiscates coins.
     Retired,
 };
 

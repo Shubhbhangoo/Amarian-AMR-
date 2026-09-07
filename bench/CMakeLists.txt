@@ -1,6 +1,6 @@
 # Amarian microbenchmarks.
 #
-# Purpose is Phase 12 — "profile before optimising" — plus regression detection.
+# Purpose is Phase 7/12 — ownership and performance evidence, plus regression detection.
 # Two rules keep the numbers honest:
 #
 #   * Benchmarks build in the shipping configuration. The bench preset leaves
@@ -27,3 +27,13 @@ amarian_add_bench(bench_util
     util_serialize_bench.cpp
 )
 target_link_libraries(bench_util PRIVATE amarian::util)
+
+amarian_add_bench(bench_net
+    net_message_bench.cpp
+)
+target_link_libraries(bench_net PRIVATE amarian::net)
+
+amarian_add_bench(bench_wallet
+    wallet_hybrid_bench.cpp
+)
+target_link_libraries(bench_wallet PRIVATE amarian::wallet)

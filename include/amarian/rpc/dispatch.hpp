@@ -3,13 +3,13 @@
 /// \file
 /// The typed half of Amarian's RPC: methods, arguments, and results, with no transport.
 ///
-/// (Documentation omitted for brevity — see the original file)
+/// (Documentation omitted for brevity â€” see the original file)
 ///
 /// ## Byte order, stated once
 ///
 /// Every 32-byte hash in an argument or a result is in reversed display order, the form
-/// `Hash256::ToHex` prints and every explorer shows. Every other hex string — a
-/// serialised block, a lock program, coinbase bytes — is in wire order, because those
+/// `Hash256::ToHex` prints and every explorer shows. Every other hex string â€” a
+/// serialised block, a lock program, coinbase bytes â€” is in wire order, because those
 /// are byte strings and not numbers. This is the same split Bitcoin's RPC uses.
 
 #include <amarian/chain/chain_state.hpp>
@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -66,6 +67,12 @@ struct Node {
     chain::ChainState* state = nullptr;
     mempool::Mempool* pool = nullptr;
     const ChainParams* params = nullptr;
+    std::function<void(const Hash256&)> relay_block;
+    std::function<void(const Hash256&)> relay_transaction;
+    /// Accepts a wallet-created transaction into the node mempool.
+    std::function<bool(const Transaction&)> submit_transaction;
+    /// Called after an accepted block changes the active chain.
+    std::function<void()> chain_changed;
 
     /// Optional wallet for wallet RPC methods.
     wallet::Wallet* wallet = nullptr;

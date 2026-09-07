@@ -59,7 +59,7 @@ struct HelloPayload {
 // --- HelloAck ---------------------------------------------------------
 
 struct HelloAckPayload {
-    // No fields – just a command with an empty payload.
+    // No fields â€“ just a command with an empty payload.
     void Serialize(Writer& writer) const;
     [[nodiscard]] static bool Deserialize(Reader& reader, HelloAckPayload&);
 };

@@ -96,7 +96,7 @@ bool HelloPayload::Deserialize(Reader& reader, HelloPayload& out, size_t max_use
 // --- HelloAckPayload -------------------------------------------------------
 
 void HelloAckPayload::Serialize(Writer&) const {
-    // No fields — nothing to write.
+    // No fields â€” nothing to write.
 }
 
 bool HelloAckPayload::Deserialize(Reader& reader, HelloAckPayload&) {

@@ -34,9 +34,11 @@ std::string VersionStringLong() {
     std::string out = VersionString();
     out += " (";
     out += AMARIAN_GIT_COMMIT;
-    if (AMARIAN_GIT_DIRTY != 0) {
+#if AMARIAN_GIT_DIRTY
+    {
         out += ", modified working tree";
     }
+#endif
     out += ')';
     return out;
 }

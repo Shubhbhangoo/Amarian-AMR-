@@ -313,13 +313,11 @@ std::expected<std::unique_ptr<ChainDb>, DbError> ChainDb::Open(const std::string
     }
 
     std::unique_ptr<Impl> impl = std::make_unique<Impl>();
-    rocksdb::DB* raw = nullptr;
     const rocksdb::Status opened =
-        rocksdb::DB::Open(options, directory, descriptors, &impl->families, &raw);
-    if (!opened.ok() || raw == nullptr || impl->families.size() != FAMILY_COUNT) {
+        rocksdb::DB::Open(options, directory, descriptors, &impl->families, &impl->db);
+    if (!opened.ok() || impl->db == nullptr || impl->families.size() != FAMILY_COUNT) {
         return std::unexpected(DbError::CannotOpen);
     }
-    impl->db.reset(raw);
     impl->params = &params;
 
     // Identity before anything else. A directory that exists at all is one whose network and
@@ -719,5 +717,4 @@ LoadChain(const ChainDb& db, int64_t now, const ChainParams& params) {
 }
 
 }  // namespace amarian::storage
-
 

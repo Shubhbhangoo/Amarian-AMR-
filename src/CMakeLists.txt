@@ -162,7 +162,7 @@ add_library(amarian_wallet STATIC
     wallet/signing.cpp
 )
 target_link_libraries(amarian_wallet
-    PUBLIC amarian::consensus
+    PUBLIC amarian::consensus amarian::json
     PRIVATE amarian::crypto amarian::primitives
 )
 add_library(amarian::wallet ALIAS amarian_wallet)
@@ -248,6 +248,17 @@ target_link_libraries(amarian_rpc_server
 )
 add_library(amarian::rpc_server ALIAS amarian_rpc_server)
 
+# --- explorer_server: read-only HTTP access to chain state ------------------
+add_library(amarian_explorer STATIC
+    explorer/http_api.cpp
+    explorer/server.cpp
+)
+target_link_libraries(amarian_explorer
+    PUBLIC amarian::chain amarian::mempool amarian::json
+    PRIVATE amarian::asio
+)
+add_library(amarian::explorer ALIAS amarian_explorer)
+
 # --- version: build identity ------------------------------------------------
 # Queries the OpenSSL actually loaded at runtime, so it links OpenSSL. Kept in
 # its own target so that nothing else acquires a dependency on OpenSSL just to
@@ -273,7 +284,7 @@ add_executable(amariand
 )
 target_link_libraries(amariand
     PRIVATE amarian::storage amarian::mining amarian::rpc_server amarian::net
-            amarian::consensus amarian::util amarian::version
+            amarian::explorer amarian::consensus amarian::util amarian::version
 )
 
 # --- amarian-cli: the client an operator actually types -----------------------
@@ -290,6 +301,14 @@ add_executable(amarian-cli
 )
 target_link_libraries(amarian-cli
     PRIVATE amarian::rpc amarian::util amarian::version amarian::asio
+)
+
+# --- amarian-wallet: standalone wallet management client --------------------
+add_executable(amarian-wallet
+    wallet/amarian_wallet.cpp
+)
+target_link_libraries(amarian-wallet
+    PRIVATE amarian::wallet amarian::rpc amarian::util amarian::version amarian::asio
 )
 
 # --- amarian-genesis: prints, checks and regenerates genesis parameters -----
@@ -309,3 +328,42 @@ add_executable(amarian-retarget-sim
     tools/retarget_sim.cpp
 )
 target_link_libraries(amarian-retarget-sim PRIVATE amarian::chain)
+
+if(WIN32 AND AMARIAN_BUILD_GUI)
+    add_executable(amarian-gui WIN32
+        gui/amarian_gui.cpp
+    )
+    target_link_libraries(amarian-gui PRIVATE amarian::rpc amarian::util amarian::asio user32 shell32)
+    target_compile_definitions(amarian-gui PRIVATE UNICODE _UNICODE)
+
+    add_executable(amarian-wallet-gui WIN32
+        gui/amarian_wallet_gui.cpp
+    )
+    target_link_libraries(amarian-wallet-gui PRIVATE amarian::json user32 shell32)
+    target_compile_definitions(amarian-wallet-gui PRIVATE UNICODE _UNICODE)
+endif()
+
+if(AMARIAN_BUILD_GPU_MINER)
+    if(NOT WIN32)
+        message(FATAL_ERROR "The CUDA miner is currently a Windows testnet-only tool")
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    add_library(amarian_cuda_miner STATIC
+        miner/cuda_sha256.cu
+    )
+    set_target_properties(amarian_cuda_miner PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+        CUDA_ARCHITECTURES "75;86;89;90"
+    )
+    target_link_libraries(amarian_cuda_miner PUBLIC CUDA::cudart)
+
+    add_executable(amarian-miner
+        miner/amarian_miner.cpp
+    )
+    target_link_libraries(amarian-miner
+        PRIVATE amarian_cuda_miner amarian::rpc amarian::util amarian::version amarian::asio
+    )
+endif()

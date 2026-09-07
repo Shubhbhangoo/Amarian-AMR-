@@ -34,6 +34,9 @@ struct UtxoEntry {
     Coin coin;
     /// Whether this output is confirmed (true) or still in the mempool (false).
     bool confirmed;
+    /// Derivation metadata used to sign this input.
+    uint32_t account_id = 0;
+    uint32_t derivation_index = 0;
 };
 
 /// The result of coin selection.

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -20,8 +21,9 @@ constexpr uint32_t GEN[] = {0x3B6A57B2U, 0x26508E6DU, 0x1EA119FAU,
 constexpr uint32_t BECH32M_CONST = 0x2BC830A3U;
 
 [[nodiscard]] uint8_t CharToValue(char c) noexcept {
-    if (c >= 'a' && c <= 'z') return static_cast<uint8_t>(c - 'a');
-    if (c >= 'A' && c <= 'Z') return static_cast<uint8_t>(c - 'A');
+    const char lower = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+    const auto found = CHARSET.find(lower);
+    if (found != std::string_view::npos) return static_cast<uint8_t>(found);
     return 0xFF;
 }
 
@@ -111,13 +113,14 @@ void ComputeChecksum5(ByteSpan hrp_expand, ByteSpan data_5bit, uint8_t checksum_
 }  // namespace
 
 std::string EncodeAddress(std::string_view hrp, uint8_t version, ByteSpan program) {
-    // Build version byte + program bytes, then convert to 5-bit.
-    ByteVec payload_bytes;
-    payload_bytes.reserve(1 + program.size());
-    payload_bytes.push_back(version);
-    payload_bytes.insert(payload_bytes.end(), program.begin(), program.end());
-
-    ByteVec five_bit = Convert8To5(payload_bytes);
+    // Bech32 witness addresses carry the version as one native 5-bit value,
+    // followed by the 8-to-5 converted program.
+    if (program.size() == std::numeric_limits<size_t>::max()) return {};
+    if (version > 31) return {};
+    ByteVec five_bit;
+    five_bit.push_back(version);
+    const ByteVec program_5bit = Convert8To5(program);
+    five_bit.insert(five_bit.end(), program_5bit.begin(), program_5bit.end());
 
     // Build HRP expand.
     ByteVec hrp_expand;
@@ -133,10 +136,10 @@ std::string EncodeAddress(std::string_view hrp, uint8_t version, ByteSpan progra
     result += hrp;
     result += '1';
     for (uint8_t v : five_bit) {
-        result += CHARSET[v];
+        result.push_back(CHARSET[static_cast<size_t>(v)]);
     }
     for (int i = 0; i < 6; ++i) {
-        result += CHARSET[checksum[i]];
+        result.push_back(CHARSET[static_cast<size_t>(checksum[i])]);
     }
     return result;
 }

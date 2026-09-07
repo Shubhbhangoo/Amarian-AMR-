@@ -146,6 +146,21 @@ std::expected<const BlockIndexEntry*, HeaderError> ChainState::AcceptBlock(const
     return entry;
 }
 
+std::expected<const BlockIndexEntry*, HeaderError> ChainState::AcceptHeader(
+    const BlockHeader& header, int64_t now) {
+    const std::expected<const BlockIndexEntry*, HeaderError> indexed =
+        index_->AddHeader(header, now, *params_);
+    if (!indexed.has_value()) {
+        return indexed;
+    }
+    const BlockIndexEntry* const entry = *indexed;
+    if (!entry->IsEligible()) {
+        return std::unexpected(HeaderError{IndexError::AlreadyRuledOut});
+    }
+    (void)CommitEntry(*entry);
+    return entry;
+}
+
 std::expected<void, ActivationFailure> ChainState::DisconnectTip(ActivationSummary& summary) {
     const BlockIndexEntry& entry = Tip();
 

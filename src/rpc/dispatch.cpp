@@ -238,7 +238,7 @@ struct TipFacts {
     int64_t median_time;
 };
 
-[[nodiscard]] TipFacts FactsFor(const Node& node) {
+[[nodiscard]] TipFacts FactsFor(const Node& node, int64_t now) {
     const chain::BlockIndexEntry& tip = node.state->Tip();
     return TipFacts{.entry = &tip,
                     // Saturating, so that reporting the next height cannot wrap past the
@@ -247,7 +247,7 @@ struct TipFacts {
                     .next_height = tip.height < std::numeric_limits<uint32_t>::max()
                                        ? tip.height + 1U
                                        : tip.height,
-                    .next_bits = chain::NextTargetBits(tip, *node.params),
+                    .next_bits = chain::NextTargetBits(tip, now, *node.params),
                     .median_time = chain::MedianTimePastAt(tip)};
 }
 
@@ -271,8 +271,8 @@ struct TipFacts {
                 {"present", true}};
 }
 
-[[nodiscard]] Result GetBlockchainInfo(Node& node, const json&, int64_t) {
-    const TipFacts facts = FactsFor(node);
+[[nodiscard]] Result GetBlockchainInfo(Node& node, const json&, int64_t now) {
+    const TipFacts facts = FactsFor(node, now);
     return json{{"chain", std::string(node.params->name)},
                 {"chain_id", node.params->chain_id.ToHex()},
                 {"blocks", facts.entry->height},
@@ -290,8 +290,8 @@ struct TipFacts {
                 {"mempool", MempoolFacts(node.pool)}};
 }
 
-[[nodiscard]] Result GetMiningInfo(Node& node, const json&, int64_t) {
-    const TipFacts facts = FactsFor(node);
+[[nodiscard]] Result GetMiningInfo(Node& node, const json&, int64_t now) {
+    const TipFacts facts = FactsFor(node, now);
     // Null rather than an error when the compact form does not decode: this method's job is
     // to report what the node believes, and "the target this build computed is unusable" is
     // a more useful thing to be told than a refusal to answer at all.
@@ -342,7 +342,7 @@ struct TimeWindow {
         coinbase_data = std::move(*bytes);
     }
 
-    const TipFacts facts = FactsFor(node);
+    const TipFacts facts = FactsFor(node, now);
     const std::expected<mining::BlockTemplate, mining::TemplateError> built =
         mining::BuildBlockTemplate(*facts.entry, *payout, now, std::move(coinbase_data),
                                    *node.params, node.pool);
@@ -423,6 +423,9 @@ struct TimeWindow {
         return std::unexpected(Error{.code = RpcError::ChainFault,
                                      .detail = chain::Describe(activated.error().error)});
     }
+    if (node.chain_changed && (activated->connected != 0 || activated->disconnected != 0)) {
+        node.chain_changed();
+    }
     // A block can pass every rule that does not need a chain and still be refused when it is
     // connected — a spend of a coin that does not exist is only visible then. Without this
     // loop such a block would be reported as accepted, which is the one answer a miner must
@@ -442,6 +445,7 @@ struct TimeWindow {
         // node produced would be invalid.
         static_cast<void>(node.pool->RemoveForBlock(block));
     }
+    if (node.relay_block) node.relay_block(entry.hash);
     return std::string_view{};
 }
 
@@ -652,6 +656,7 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
                                  : json()}};
     }
     const mempool::Entry& entry = **accepted;
+    if (node.relay_transaction) node.relay_transaction(entry.wtxid);
     return json{{"accepted", true},
                 {"txid", entry.txid.ToHex()},
                 {"wtxid", entry.wtxid.ToHex()},
@@ -671,7 +676,12 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
 
 [[nodiscard]] Result GetBalance(Node& node, const json&, int64_t) {
     if (node.wallet == nullptr) {
-        return json{{"confirmed", 0}, {"pending", 0}, {"total", 0}};
+        // Not zero. A node with no wallet does not know that the caller holds nothing, and a
+        // balance of zero is a claim about their money rather than about this node's
+        // configuration. `getnewaddress` and `sendtoaddress` already refuse here for the same
+        // reason; a wallet interface that renders the zero -- as the Windows one does -- would
+        // otherwise show "0.0000000000 AMR" to someone whose coins are simply not loaded.
+        return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "this node has no wallet"});
     }
     const wallet::Balance balance = node.wallet->GetBalance();
     return json{{"confirmed", balance.confirmed}, {"pending", balance.pending}, {"total", balance.Total()}};
@@ -687,7 +697,10 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
         if (acct.has_value()) account_id = static_cast<uint32_t>(*acct);
     }
     const wallet::AddressInfo info = node.wallet->GetNewAddress(account_id);
-    return json{{"address", info.address}, {"account_id", info.account_id}, {"index", info.index}};
+    Writer lock_writer;
+    info.lock.Serialize(lock_writer);
+    return json{{"address", info.address}, {"lock", ToHex(lock_writer.Take())},
+                {"account_id", info.account_id}, {"index", info.index}};
 }
 
 [[nodiscard]] Result SendToAddress(Node& node, const json& args, int64_t) {
@@ -705,11 +718,31 @@ inline constexpr uint64_t MAX_GENERATE_BLOCKS = 1'000;
     if (!amt.has_value()) return std::unexpected(amt.error());
     const auto sent = node.wallet->Send(*address, static_cast<int64_t>(*amt));
     if (!sent.has_value()) return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "send failed"});
+    if (node.submit_transaction) {
+        const auto raw = FromHex(sent->raw_tx_hex);
+        if (!raw.has_value()) {
+            return std::unexpected(Error{.code = RpcError::MalformedTransaction,
+                                         .detail = Describe(RpcError::MalformedTransaction)});
+        }
+        Reader reader{ByteSpan(*raw)};
+        Transaction tx;
+        if (!Transaction::Deserialize(reader, tx, node.params->block_limits.tx) ||
+            !reader.Finish() || !node.submit_transaction(tx)) {
+            return std::unexpected(Error{.code = RpcError::InvalidParams,
+                                         .detail = "node rejected wallet transaction"});
+        }
+        if (node.relay_transaction) node.relay_transaction(tx.Wtxid());
+    }
     return json{{"txid", sent->txid.ToHex()}, {"fee", sent->fee}};
 }
 
 [[nodiscard]] Result ListTransactions(Node& node, const json&, int64_t) {
-    if (node.wallet == nullptr) return json::array();
+    // Same distinction as `getbalance`: an empty history is what a loaded wallet with no
+    // transactions looks like, so returning it for a node with no wallet at all answers a
+    // question that was not asked.
+    if (node.wallet == nullptr) {
+        return std::unexpected(Error{.code = RpcError::InvalidParams, .detail = "this node has no wallet"});
+    }
     const auto txs = node.wallet->ListTransactions();
     json list = json::array();
     for (const auto& tx : txs) {

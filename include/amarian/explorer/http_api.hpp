@@ -5,7 +5,7 @@
 ///
 /// This is the read-only half of the RPC surface, served as a plain HTTP REST API (GET
 /// requests returning JSON) that a block explorer, a wallet UI or a monitoring tool can call
-/// without authenticating — because every answer it gives is a property of the chain the node
+/// without authenticating â€” because every answer it gives is a property of the chain the node
 /// is on, and the node's address is loopback-only, so only a process on the same machine can
 /// reach it. Authentication is deliberately absent: a port a block explorer talks to must be
 /// reachable by the web server it sits behind, and making an operator configure credentials
@@ -13,11 +13,11 @@
 ///
 /// The endpoints:
 ///
-///   GET /explorer/tip              — the active tip's hash, height, work and timestamp
-///   GET /explorer/block/<hash>     — a block's header by hash
-///   GET /explorer/block-at/<height>— the block at a height
-///   GET /explorer/mempool          — transactions in the mempool with fee rates
-///   GET /explorer/status           — node information summary
+///   GET /explorer/tip              â€” the active tip's hash, height, work and timestamp
+///   GET /explorer/block/<hash>     â€” a block's header by hash
+///   GET /explorer/block-at/<height>â€” the block at a height
+///   GET /explorer/mempool          â€” transactions in the mempool with fee rates
+///   GET /explorer/status           â€” node information summary
 ///
 /// Every endpoint returns JSON and never a redirect, a form or a page. An explorer that wants
 /// a human page renders from these endpoints on its own side.
@@ -45,7 +45,7 @@ namespace amarian::explorer {
 /// The largest reply this server will produce.
 inline constexpr size_t MAX_EXPLORER_RESPONSE = 4U << 20;
 
-/// The largest request the explorer server reads. Headers only — GET has no body.
+/// The largest request the explorer server reads. Headers only â€” GET has no body.
 inline constexpr size_t MAX_EXPLORER_HEADERS = 4096;
 
 /// The longest path we will consider.

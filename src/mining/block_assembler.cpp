@@ -144,7 +144,9 @@ BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_
         earliest < std::numeric_limits<int64_t>::max() ? earliest + 1 : earliest;
     block.header.timestamp = std::max(now, lower_bound);
 
-    block.header.target_bits = bits;
+    // The testnet escape hatch is judged against the actual child timestamp.
+    block.header.target_bits = chain::NextTargetBits(tip, block.header.timestamp, params);
+    assembled.target = *CompactToTarget(block.header.target_bits);
 
     // The root the transactions actually produce, asked for rather than tracked. A recorded
     // root would be a second description of the block's contents, and two descriptions of
@@ -167,7 +169,8 @@ BuildBlockTemplate(const chain::BlockIndexEntry& tip, const Lock& payout, int64_
     // header half includes `HeaderInsufficientWork` — an unsolved template fails that by
     // definition, so the whole block is checked later, once it is solved, on its way through
     // `ChainState::AcceptBlock`.
-    const consensus::HeaderContext context = chain::HeaderContextFor(tip, now, params);
+    const consensus::HeaderContext context =
+        chain::HeaderContextFor(tip, now, params, block.header.timestamp);
     if (const consensus::Verdict placed =
             consensus::ContextualCheckBlockHeader(block.header, context, params);
         !placed) {

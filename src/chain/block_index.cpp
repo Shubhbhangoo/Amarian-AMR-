@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -98,13 +99,30 @@ uint32_t NextTargetBits(const BlockIndexEntry& parent, const ChainParams& params
     return consensus::AsertNextBits(params, parent.height, parent.header.timestamp);
 }
 
+uint32_t NextTargetBits(const BlockIndexEntry& parent, int64_t candidate_timestamp,
+                        const ChainParams& params) noexcept {
+    if (params.trivial_difficulty) {
+        return params.pow_limit_bits;
+    }
+    const int64_t spacing = params.target_block_seconds;
+    const bool gap_is_large =
+        spacing > 0 &&
+        parent.header.timestamp <= std::numeric_limits<int64_t>::max() - 2 * spacing &&
+        candidate_timestamp > parent.header.timestamp + 2 * spacing;
+    if (params.allow_min_difficulty_blocks && gap_is_large) {
+        return params.pow_limit_bits;
+    }
+    return NextTargetBits(parent, params);
+}
+
 consensus::HeaderContext
-HeaderContextFor(const BlockIndexEntry& parent, int64_t now, const ChainParams& params) {
+HeaderContextFor(const BlockIndexEntry& parent, int64_t now, const ChainParams& params,
+                 std::optional<int64_t> candidate_timestamp) {
     return consensus::HeaderContext{
         .prev_hash = parent.hash,
         .prev_height = parent.height,
         .median_time_past = MedianTimePastAt(parent),
-        .expected_bits = NextTargetBits(parent, params),
+        .expected_bits = NextTargetBits(parent, candidate_timestamp.value_or(now), params),
         .now = now,
     };
 }
@@ -199,7 +217,8 @@ BlockIndex::AddHeader(const BlockHeader& header, int64_t now, const ChainParams&
         return std::unexpected(HeaderError{IndexError::PredecessorInvalid});
     }
 
-    const consensus::HeaderContext context = HeaderContextFor(*parent, now, params);
+    const consensus::HeaderContext context =
+        HeaderContextFor(*parent, now, params, header.timestamp);
     if (const consensus::Verdict verdict =
             consensus::ContextualCheckBlockHeader(header, context, params);
         !verdict.has_value()) {

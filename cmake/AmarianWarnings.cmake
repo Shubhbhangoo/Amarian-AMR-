@@ -5,6 +5,16 @@
 # is an error, not a warning.
 
 function(amarian_apply_warnings target)
+    if(MSVC)
+        set(msvc_flags /W4 /permissive-)
+        target_compile_definitions(${target} INTERFACE _CRT_SECURE_NO_WARNINGS)
+        if(AMARIAN_WERROR)
+            list(APPEND msvc_flags /WX)
+        endif()
+        target_compile_options(${target} INTERFACE ${msvc_flags})
+        return()
+    endif()
+
     set(common_flags
         -Wall
         -Wextra

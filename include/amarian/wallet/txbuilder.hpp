@@ -6,7 +6,7 @@
 ///
 /// The wallet constructs unsigned transactions from UTXOs and recipient
 /// information, then signs each input with the appropriate key derived from
-/// the seed. No cryptographic primitive lives here — signing is delegated to
+/// the seed. No cryptographic primitive lives here - signing is delegated to
 /// libsecp256k1 and OpenSSL through the crypto layer.
 
 #include <amarian/primitives/coin.hpp>
@@ -54,6 +54,7 @@ public:
 
     /// Sets the fee rate in facets per weight unit.
     void SetFeeRate(int64_t feerate) noexcept { fee_rate_ = feerate; }
+    void SetChainId(const Hash256& chain_id) noexcept { chain_id_ = chain_id; }
 
     /// Sets available UTXOs from the wallet.
     void SetUtxos(std::vector<UtxoEntry> utxos) { utxos_ = std::move(utxos); }
@@ -70,6 +71,7 @@ private:
     uint32_t account_;
     std::vector<std::pair<Lock, int64_t>> recipients_;
     int64_t fee_rate_ = DEFAULT_FEERATE;
+    Hash256 chain_id_{};
     std::vector<UtxoEntry> utxos_;
 
     /// Builds the SpendCondition for a single input given the key bytes and scheme.

@@ -393,26 +393,19 @@ std::vector<std::string> GenerateMnemonic(const MasterSeed& seed) {
 
     std::array<uint8_t, 33> bits{};
     std::memcpy(bits.data(), seed.data(), SEED_BYTES);
-    bits[32] = static_cast<uint8_t>(hash.Data()[0] & 0xF8);
+    bits[32] = hash.Data()[0];
 
     std::vector<std::string> words;
     words.reserve(MNEMONIC_WORD_COUNT);
 
     for (size_t i = 0; i < MNEMONIC_WORD_COUNT; ++i) {
         const size_t bit_offset = i * 11;
-        const size_t byte_idx = bit_offset / 8;
-        const size_t bit_in_byte = bit_offset % 8;
-
         uint32_t word_idx = 0;
-        if (bit_in_byte <= 5) {
-            word_idx = (static_cast<uint32_t>(bits[byte_idx]) << 8) |
-                        static_cast<uint32_t>(bits[byte_idx + 1]);
-            word_idx = (word_idx >> (5 - static_cast<uint32_t>(bit_in_byte))) & 0x7FF;
-        } else {
-            word_idx = (static_cast<uint32_t>(bits[byte_idx]) << 16) |
-                        (static_cast<uint32_t>(bits[byte_idx + 1]) << 8) |
-                        static_cast<uint32_t>(bits[byte_idx + 2]);
-            word_idx = (word_idx >> (13 - static_cast<uint32_t>(bit_in_byte - 5))) & 0x7FF;
+        for (size_t bit = 0; bit < 11; ++bit) {
+            const size_t offset = bit_offset + bit;
+            const uint32_t bit_value =
+                (static_cast<uint32_t>(bits[offset / 8]) >> (7U - (offset % 8U))) & 1U;
+            word_idx = (word_idx << 1U) | bit_value;
         }
 
         words.push_back(std::string(Bip39Word(word_idx)));
@@ -432,22 +425,16 @@ std::optional<MasterSeed> SeedFromMnemonic(const std::vector<std::string>& words
         if (idx < 0) return std::nullopt;
 
         const size_t bit_offset = i * 11;
-        const size_t byte_idx = bit_offset / 8;
-        const size_t bit_in_byte = bit_offset % 8;
-
-        if (bit_in_byte <= 5) {
-            bits[byte_idx] |= static_cast<uint8_t>((idx >> (10 - static_cast<int>(bit_in_byte))) & 0xFF);
-            bits[byte_idx + 1] |= static_cast<uint8_t>(idx << (bit_in_byte + 5)) & 0xFF;
-        } else {
-            const size_t shift = 13 - (bit_in_byte - 5);
-            bits[byte_idx] |= static_cast<uint8_t>((idx >> (8 + static_cast<int>(shift))) & 0xFF);
-            bits[byte_idx + 1] |= static_cast<uint8_t>((idx >> shift) & 0xFF);
-            bits[byte_idx + 2] |= static_cast<uint8_t>(idx << (8 - shift)) & 0xFF;
+        for (size_t bit = 0; bit < 11; ++bit) {
+            const size_t offset = bit_offset + bit;
+            if ((static_cast<uint32_t>(idx) & (1U << (10U - bit))) != 0U) {
+                bits[offset / 8] |= static_cast<uint8_t>(1U << (7U - (offset % 8U)));
+            }
         }
     }
 
     const Hash256 hash = Sha256(ByteSpan(bits.data(), SEED_BYTES));
-    if ((hash.Data()[0] & 0xF8) != (bits[32] & 0xF8)) {
+    if (hash.Data()[0] != bits[32]) {
         return std::nullopt;
     }
 

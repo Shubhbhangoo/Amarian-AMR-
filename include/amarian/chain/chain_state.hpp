@@ -344,6 +344,14 @@ public:
     /// The applied tip. Never null.
     [[nodiscard]] const BlockIndexEntry& Tip() const noexcept;
 
+    /// The header index used by this state. Networking uses it to offer headers
+    /// without bypassing the chain's validation rules.
+    [[nodiscard]] const BlockIndex& Index() const noexcept { return *index_; }
+
+    /// The block body store used by this state. Networking uses it to serve
+    /// bodies that have already passed local validation.
+    [[nodiscard]] const BlockStore& Store() const noexcept { return *store_; }
+
     /// The unspent outputs as of the applied tip, for reading only.
     ///
     /// Exposed because judging a transaction that has not been mined — which is what a
@@ -401,6 +409,11 @@ public:
     /// case when a block arrives from two peers at once.
     [[nodiscard]] std::expected<const BlockIndexEntry*, HeaderError>
     AcceptBlock(const Block& block, int64_t now);
+
+    /// Accept a header without a body. The body must still arrive through
+    /// AcceptBlock before activation can advance.
+    [[nodiscard]] std::expected<const BlockIndexEntry*, HeaderError>
+    AcceptHeader(const BlockHeader& header, int64_t now);
 
     /// Moves the active chain as far towards the index's best header as this node's stored
     /// bodies allow, applying and reversing blocks so that the coins set follows.

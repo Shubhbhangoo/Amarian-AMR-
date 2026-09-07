@@ -4,7 +4,7 @@ Living record of where the project actually is. Updated as work lands, not as
 work is planned. Anything not listed as done is not done.
 
 **Last updated:** 2026-09-07
-**Current phase:** Phase 10 - Regtest and testnet
+**Current phase:** Phase 13 - Mainnet readiness
 **Phase 0 status:** complete
 **Phase 1 status:** complete. The acceptance criterion is met: two independently launched
 nodes, with separate data directories, reach the same tip when one mines a chain and hands
@@ -540,9 +540,48 @@ Phase 3 status: **complete**.
 
 ## Phase 4 - Peer-to-peer networking
 
-The framing, handshake, and headers-first sync specified in [docs/NETWORK.md](docs/NETWORK.md) are now implemented: message framing (magic, command, length, checksum), protocol serialisation for all 12 message types, the handshake state machine (chain_id check, self-connection detection, protocol version negotiation), an outbound peer manager with automatic reconnection, and the headers-first sync state machine. The `--connect` flag wires the P2P layer into amariand alongside the RPC server, sharing the same event loop. 24 pure-function unit tests verify the message-level logic in isolation.
+The framing, handshake, headers-first sync, and block download path specified in [docs/NETWORK.md](docs/NETWORK.md) are implemented: message framing (magic, command, length, checksum), protocol serialisation for all 12 message types, the handshake state machine (chain_id check, self-connection detection, protocol version negotiation), an inbound/outbound peer manager with automatic reconnection, a serialized write queue, header serving, block requests, local validation, and chain activation. The `--connect` flag wires the P2P layer into amariand alongside the RPC server. The acceptance probe [scripts/phase4_acceptance.sh](scripts/phase4_acceptance.sh) mines three blocks on node A, downloads them over TCP into node B, and compares both RPC tips.
 
-Phase 4 is not yet at its acceptance criterion (two or more independent nodes discovering each other, synchronising, and converging after a deliberate fork), but the message-level foundation is in place.
+The acceptance probe also creates a competing one-block fork on node B before the connection; node B then downloads the heavier three-block branch and converges on node A's tip. Block inventory announcements, transaction relay hooks, inbound/outbound connection caps, ping timeouts, bounded `getaddr`/`addr` exchange, persistent `peers.dat` storage, and temporary endpoint bans for malformed address requests are implemented. Phase 4's acceptance criterion is complete.
+
+## Phase 5 - Wallet
+
+**Criterion met:** create an address, acquire coins, send them, and receive them on a different node — with the backup verified by actually restoring from it.
+
+Key derivation from a 256-bit master seed via HKDF-SHA256, bech32m address encoding (BIP-350), wallet database with seed encryption at rest, coin selection with dust-threshold enforcement, fee estimation from a rolling window of recent blocks, transaction builder with Schnorr and ML-DSA-44 signing, and BIP-39 backup/restore are all implemented. The standalone `amarian-wallet` CLI connects to the running node via the RPC cookie for online commands (`getbalance`, `sendtoaddress`) and operates offline for key-management commands (`create`, `getnewaddress`, `listaddresses`, `backup`, `restore`).
+
+The acceptance probe [scripts/phase5_acceptance.sh](scripts/phase5_acceptance.sh) creates two wallets, mines 25 blocks on node A paying to its own address, starts both nodes as a connected P2P pair, sends 50 AMR from node A to node B, mines a confirmation block, verifies node B's `listtransactions` and `getbalance`, exports A's BIP-39 mnemonic, restores into a third wallet C, and asserts the first derived address matches.
+
+Phase 5 status: **complete**.
+
+Landed in Phase 5:
+- **Key derivation** from a 256-bit master seed via HKDF-SHA256, domain-separated by scheme (Schnorr, ML-DSA-44, SLH-DSA)
+- **bech32m address encoding** (BIP-350) for Lock commitments, with full encode/decode
+- **Wallet database** with seed encryption at rest, account management, transaction history
+- **Coin selection** with value-based selection, weight estimation, and dust threshold enforcement
+- **Fee estimation** from a rolling window of recent blocks (economy/normal/priority tiers)
+- **Transaction builder** that constructs unsigned transactions and signs through the crypto layer
+- **Backup and restore** with BIP-39 mnemonics (full 2048-word English list) and metadata serialisation
+- **Top-level Wallet API** (balance, receive, send, list transactions, backup, settings)
+- **`amarian-wallet` CLI** with RPC-first online commands and offline key-management
+- **32 unit tests** covering derivation, addresses, coin selection, fee estimation, database, mnemonics, metadata, and transaction building
+
+## Phase 7 - Hybrid ownership
+
+Phase 7 status: **complete - hybrid ownership deferred for generation 1**.
+
+The benchmark [scripts/phase7_benchmark.sh](scripts/phase7_benchmark.sh) measures
+valid Schnorr-only, ML-DSA-44-only, and Schnorr + ML-DSA-44 hybrid spends through
+the production consensus authorisation path. The recorded results are in
+[docs/PHASE7_HYBRID.md](docs/PHASE7_HYBRID.md). Hybrid verification measured
+approximately 212 microseconds versus 141 microseconds for ML-DSA-44-only, and
+hybrid transactions fit 474 times per block versus 486 ML-DSA-44-only
+transactions in the benchmark fixture. The added availability burden of two
+mandatory key types is not justified for the default generation-1 wallet policy.
+
+The decision is a deferral rather than a format limitation: threshold 2-of-2
+conditions, hybrid signing helpers, and cryptographic agility remain available
+for a future migration with new backup and recovery procedures.
 
 ## Phase 8 - Cryptographic agility
 
@@ -599,6 +638,8 @@ The three networks (mainnet, testnet, regtest) have independent parameters verif
 - `--import-blocks` refuses foreign-network block files on the first record's magic
 - `ChainDb::Open` refuses a data directory stamped with another network's chain_id
 
+## Phase 6 - Post-quantum integration
+
 **Criterion met:** valid post-quantum transactions work end to end; invalid ones are rejected.
 
 The signing bridge produces real ML-DSA-44 signatures from OpenSSL and real Schnorr (secp256k1) signatures from libsecp256k1. Key generation, message signing, and signature verification are exercised end-to-end: a generated key signs a message, the signature verifies through `crypto::Verify`, and a tampered signature, wrong key, wrong message, wrong scheme, or malformed key/signature are all rejected with the correct error code.
@@ -606,21 +647,19 @@ The signing bridge produces real ML-DSA-44 signatures from OpenSSL and real Schn
 `CheckSpendAuthorisation` is exercised with real ML-DSA-44 signatures through the full consensus path: a transaction with a valid ML-DSA-44 witness passes, and a tampered witness is rejected with `TxSignatureDoesNotVerify`.
 
 Landed in Phase 6:
-- **Key derivation** from a 256-bit master seed via HKDF-SHA256, domain-separated by scheme (Schnorr, ML-DSA-44, SLH-DSA)
-- **bech32m address encoding** (BIP-350) for Lock commitments, with full encode/decode
-- **Wallet database** with seed encryption at rest, account management, transaction history
-- **Coin selection** with value-based selection, weight estimation, and dust threshold enforcement
-- **Fee estimation** from a rolling window of recent blocks (economy/normal/priority tiers)
-- **Transaction builder** that constructs unsigned transactions and signs through the crypto layer
-- **Backup and restore** with BIP-39 mnemonics (full 2048-word English list) and metadata serialisation
-- **Top-level Wallet API** (balance, receive, send, list transactions, backup, settings)
-- **15 unit tests** covering derivation, addresses, coin selection, fee estimation, database, mnemonics, and metadata
+- **ML-DSA-44 signing bridge** via OpenSSL 3.x EVP API (key generation, sign, verify)
+- **Schnorr signing bridge** via libsecp256k1 (key generation, sign, verify)
+- **`crypto::Verify` dispatch** over all supported signature schemes
+- **`CheckSpendAuthorisation`** consensus integration — real PQ signatures through the full validation path
+- **15 unit tests** covering ML-DSA-44 sign/verify/rejection, Schnorr sign/verify/rejection, cross-scheme rejection, and full consensus-path spend authorisation
 
 ## Next task
 
-Phase 11 - Real-world infrastructure, where the CLI node, CLI wallet, RPC interface, explorer API, documentation and release packaging all exist and work.
-
-RPC that an external process can call. The next phase is networking (Phase 4 has started).
+Phase 13 is in progress. The launch gates and local audit are documented in
+[docs/PHASE13_MAINNET_READINESS.md](docs/PHASE13_MAINNET_READINESS.md) and
+[scripts/phase13_readiness.sh](scripts/phase13_readiness.sh). The next work is
+to produce dated evidence for the external review, long-running testnet,
+upgrade/recovery drills, signed releases, monitoring, and final freeze.
 
 ## Blockers
 

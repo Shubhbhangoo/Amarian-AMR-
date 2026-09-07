@@ -1,5 +1,5 @@
 /// \file
-/// `amarian-wallet` — a standalone wallet management CLI.
+/// `amarian-wallet` â€” a standalone wallet management CLI.
 ///
 /// Creates, opens, and manages wallets: generate addresses, check balance, send
 /// transactions, list transaction history, export/import backups.
@@ -30,6 +30,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,19 @@ using json = nlohmann::json;
 constexpr int EXIT_USAGE = 2;
 constexpr int EXIT_RPC_ERROR = 1;
 constexpr int EXIT_TRANSPORT = 3;
+
+std::string FormatAmr(int64_t facets) {
+    const bool negative = facets < 0;
+    const uint64_t magnitude = negative
+                                   ? static_cast<uint64_t>(-(facets + 1)) + 1U
+                                   : static_cast<uint64_t>(facets);
+    const uint64_t whole = magnitude / static_cast<uint64_t>(FACETS_PER_AMR);
+    const uint64_t fraction = magnitude % static_cast<uint64_t>(FACETS_PER_AMR);
+    std::string fraction_text = std::to_string(fraction);
+    fraction_text.insert(fraction_text.begin(),
+                         10U - fraction_text.size(), '0');
+    return std::string(negative ? "-" : "") + std::to_string(whole) + "." + fraction_text;
+}
 
 void RegisterOptions(ArgsParser& parser) {
     parser.Add({.name = "help", .kind = ArgKind::Flag, .help = "Show this help and exit.", .short_name = 'h'});
@@ -84,6 +98,19 @@ std::optional<std::string> ResolveDataDir(const ArgsParser& parser, const ChainP
         return std::nullopt;
     }
     return std::string(home) + "/.amarian/" + std::string(params.name);
+}
+
+std::expected<int64_t, std::string> ParseAmount(std::string_view text) {
+    if (text.empty()) return std::unexpected("amount must be a positive integer number of facets");
+    int64_t amount = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), amount);
+    if (parsed.ec == std::errc::result_out_of_range || parsed.ptr != text.data() + text.size()) {
+        return std::unexpected("amount must be a positive integer number of facets");
+    }
+    if (parsed.ec != std::errc{} || amount <= 0) {
+        return std::unexpected("amount must be a positive integer number of facets");
+    }
+    return amount;
 }
 
 /// Call the node's RPC method.
@@ -174,6 +201,7 @@ std::expected<json, std::string> RpcCall(const rpc::Cookie& cookie, uint16_t por
 
 /// Print usage.
 void PrintUsage(const ArgsParser& parser, const ChainParams& params) {
+    (void)params;
     std::printf("Amarian wallet tool %s\n\n", VersionString().c_str());
     std::puts(parser.HelpText().c_str());
     std::puts("\nCommands (positional, after options):\n");
@@ -186,6 +214,32 @@ void PrintUsage(const ArgsParser& parser, const ChainParams& params) {
     std::puts("  backup              Export mnemonic backup");
     std::puts("  restore <mnemonic>  Restore wallet from mnemonic");
     std::puts("\nOptions:\n");
+}
+
+std::string JoinWords(const std::vector<std::string>& words) {
+    std::string joined;
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (i != 0) joined += ' ';
+        joined += words[i];
+    }
+    return joined;
+}
+
+std::vector<std::string> SplitWords(std::string_view text) {
+    std::vector<std::string> words;
+    std::string current;
+    for (const char c : text) {
+        if (c == ' ' || c == '\t') {
+            if (!current.empty()) {
+                words.push_back(std::move(current));
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) words.push_back(std::move(current));
+    return words;
 }
 
 int Run(int argc, char* argv[]) {
@@ -233,7 +287,7 @@ int Run(int argc, char* argv[]) {
         // Print seed mnemonic
         auto backup = wallet->ExportBackup();
         std::printf("Wallet created at %s\n", wallet_path.c_str());
-        std::printf("Mnemonic (backup this):\n%s\n", backup.mnemonic.c_str());
+        std::printf("Mnemonic (backup this):\n%s\n", JoinWords(backup.mnemonic).c_str());
         return EXIT_SUCCESS;
     } else if (command == "restore") {
         if (words.size() < 2) {
@@ -242,7 +296,7 @@ int Run(int argc, char* argv[]) {
         }
         // Recreate wallet from mnemonic
         wallet::WalletBackup backup;
-        backup.mnemonic = words[1];
+        backup.mnemonic = SplitWords(words[1]);
         auto seed = wallet::SeedFromMnemonic(backup.mnemonic);
         if (!seed) {
             std::fputs("amarian-wallet: invalid mnemonic\n", stderr);
@@ -273,7 +327,8 @@ int Run(int argc, char* argv[]) {
         ? std::filesystem::path(parser.GetString("cookie"))
         : std::filesystem::path(*datadir) / ".cookie";
     const auto cookie = rpc::Cookie::Read(cookie_path);
-    if (!cookie) {
+    const bool is_online_command = (command == "getbalance" || command == "send");
+    if (!cookie && is_online_command) {
         std::fprintf(stderr, "amarian-wallet: cannot read RPC cookie: %s\n",
                      cookie.error().c_str());
         // Non-fatal for offline operations
@@ -292,22 +347,57 @@ int Run(int argc, char* argv[]) {
         }
         return EXIT_SUCCESS;
     } else if (command == "getbalance") {
+        if (cookie) {
+            auto rpc_result = RpcCall(*cookie, port, "getbalance", json::array(), timeout);
+            if (rpc_result && rpc_result->contains("result")) {
+                const auto& res = (*rpc_result)["result"];
+                long long confirmed = res.value("confirmed", 0LL);
+                long long pending = res.value("pending", 0LL);
+                long long total = res.value("total", 0LL);
+                std::printf("Confirmed: %s AMR (%lld facets)\n", FormatAmr(confirmed).c_str(), confirmed);
+                std::printf("Pending:   %s AMR (%lld facets)\n", FormatAmr(pending).c_str(), pending);
+                std::printf("Total:     %s AMR (%lld facets)\n", FormatAmr(total).c_str(), total);
+                return EXIT_SUCCESS;
+            }
+        }
         auto bal = wallet->GetBalance();
-        std::printf("Confirmed: %lld facets\n", static_cast<long long>(bal.confirmed));
-        std::printf("Pending:   %lld facets\n", static_cast<long long>(bal.pending));
-        std::printf("Total:     %lld facets\n", static_cast<long long>(bal.Total()));
+        std::printf("Confirmed: %s AMR (%lld facets)\n", FormatAmr(bal.confirmed).c_str(), static_cast<long long>(bal.confirmed));
+        std::printf("Pending:   %s AMR (%lld facets)\n", FormatAmr(bal.pending).c_str(), static_cast<long long>(bal.pending));
+        std::printf("Total:     %s AMR (%lld facets)\n", FormatAmr(bal.Total()).c_str(), static_cast<long long>(bal.Total()));
         return EXIT_SUCCESS;
     } else if (command == "send") {
         if (words.size() < 3) {
             std::fputs("amarian-wallet: send <address> <amount>\n", stderr);
             return EXIT_USAGE;
         }
-        const auto amount = std::atoll(words[2].c_str());
-        if (amount <= 0) {
-            std::fputs("amarian-wallet: amount must be positive\n", stderr);
+        const auto amount = ParseAmount(words[2]);
+        if (!amount.has_value()) {
+            std::fprintf(stderr, "amarian-wallet: %s\n", amount.error().c_str());
             return EXIT_USAGE;
         }
-        auto result = wallet->Send(words[1], amount);
+        if (cookie) {
+            auto rpc_result = RpcCall(*cookie, port, "sendtoaddress",
+                                       json::array({words[1], *amount}), timeout);
+            if (!rpc_result.has_value()) {
+                std::fprintf(stderr, "amarian-wallet: RPC send failed: %s\n",
+                             rpc_result.error().c_str());
+                return EXIT_RPC_ERROR;
+            }
+            const auto result = rpc_result->find("result");
+            if (result == rpc_result->end() || !result->is_object()) {
+                std::fputs("amarian-wallet: RPC send returned an invalid result\n", stderr);
+                return EXIT_RPC_ERROR;
+            }
+            {
+                const auto& res = *result;
+                std::string txid = res.value("txid", "");
+                long long fee = res.value("fee", 0LL);
+                std::printf("Sent. txid: %s, fee: %lld\n", txid.c_str(), fee);
+                std::printf("Broadcast result: accepted\n");
+                return EXIT_SUCCESS;
+            }
+        }
+        auto result = wallet->Send(words[1], *amount);
         if (!result) {
             std::fputs("amarian-wallet: send failed\n", stderr);
             return EXIT_FAILURE;
@@ -333,7 +423,7 @@ int Run(int argc, char* argv[]) {
         wallet::StoredTransaction stx;
         stx.txid = result->txid;
         stx.received = 0;
-        stx.sent = amount;
+        stx.sent = *amount;
         stx.fee = result->fee;
         stx.height = -1;
         stx.raw_tx = ByteVec();
@@ -352,7 +442,7 @@ int Run(int argc, char* argv[]) {
         return EXIT_SUCCESS;
     } else if (command == "backup") {
         auto backup = wallet->ExportBackup();
-        std::printf("Mnemonic:\n%s\n\nMetadata:\n%s\n", backup.mnemonic.c_str(), backup.metadata.c_str());
+        std::printf("Mnemonic:\n%s\n\nMetadata:\n%s\n", JoinWords(backup.mnemonic).c_str(), ToHex(backup.metadata).c_str());
         return EXIT_SUCCESS;
     } else {
         std::fprintf(stderr, "amarian-wallet: unknown command '%s'. Try --help.\n", command.c_str());

@@ -52,6 +52,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
@@ -212,6 +213,13 @@ using HeaderError = std::variant<consensus::ValidationError, IndexError>;
 [[nodiscard]] uint32_t NextTargetBits(const BlockIndexEntry& parent,
                                       const ChainParams& params) noexcept;
 
+/// The same rule for a particular child timestamp. Testnet's minimum-difficulty
+/// escape hatch is a property of the candidate block, not of the parent alone:
+/// after a gap greater than two target intervals, the child may use the floor.
+[[nodiscard]] uint32_t NextTargetBits(const BlockIndexEntry& parent,
+                                      int64_t candidate_timestamp,
+                                      const ChainParams& params) noexcept;
+
 /// Everything `consensus::ContextualCheckBlockHeader` needs in order to judge a child of
 /// `parent`, gathered from the index.
 ///
@@ -219,7 +227,8 @@ using HeaderError = std::variant<consensus::ValidationError, IndexError>;
 /// deciding validity from them is a pure function elsewhere. `now` is passed in rather
 /// than read from a clock here, for the same reason.
 [[nodiscard]] consensus::HeaderContext
-HeaderContextFor(const BlockIndexEntry& parent, int64_t now, const ChainParams& params);
+HeaderContextFor(const BlockIndexEntry& parent, int64_t now, const ChainParams& params,
+                 std::optional<int64_t> candidate_timestamp = std::nullopt);
 
 // --- Moving from one tip to another -----------------------------------------
 

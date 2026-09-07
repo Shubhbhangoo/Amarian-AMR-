@@ -8,6 +8,7 @@
 #include <amarian/primitives/sighash.hpp>
 #include <amarian/primitives/spend_condition.hpp>
 #include <amarian/wallet/fees.hpp>
+#include <amarian/wallet/signing.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -74,7 +75,8 @@ std::optional<UnsignedTx> TxBuilder::Build() {
 
         // Derive key for this input.
         ByteVec privkey(32);
-        DerivePrivkey(seed_, account_, entry.outpoint.index, privkey);
+        DerivePrivkey(seed_, entry.account_id == 0 ? account_ : entry.account_id,
+                      entry.derivation_index, privkey);
         utx.input_private_keys.push_back(std::move(privkey));
     }
 
@@ -104,13 +106,17 @@ std::optional<UnsignedTx> TxBuilder::Build() {
 
 SpendCondition TxBuilder::BuildSpendCondition(ByteSpan privkey_bytes,
                                               uint16_t scheme_id) const {
-    (void)privkey_bytes;
     SpendCondition condition;
     condition.version = 1;
     condition.threshold = 1;
     condition.keys.resize(1);
     condition.keys[0].scheme = scheme_id;
-    condition.keys[0].bytes = ByteVec(privkey_bytes.begin(), privkey_bytes.end());
+    if (scheme_id == crypto::SCHEME_SCHNORR_SECP256K1) {
+        const auto keypair = GenerateSchnorrKey(privkey_bytes);
+        if (keypair.has_value()) condition.keys[0].bytes = keypair->public_key;
+    } else {
+        condition.keys[0].bytes = ByteVec(privkey_bytes.begin(), privkey_bytes.end());
+    }
     return condition;
 }
 
@@ -118,17 +124,19 @@ std::optional<ByteVec>
 TxBuilder::SignInput(const Transaction& tx, const SigHashMidstates& midstates,
                      size_t input_index, int64_t spent_amount,
                      const SpendCondition& condition,
-                     ByteSpan /*privkey_bytes*/, uint16_t scheme_id) {
+                     ByteSpan privkey_bytes, uint16_t scheme_id) {
     // Compute the signature hash.
-    (void)SignatureHash(Hash256{}, tx, midstates,
-                                           static_cast<uint32_t>(input_index),
-                                           spent_amount, condition);
+    const Hash256 sighash = SignatureHash(chain_id_, tx, midstates,
+                                          static_cast<uint32_t>(input_index),
+                                          spent_amount, condition);
 
-    const crypto::SchemeSpec* spec = crypto::FindScheme(scheme_id);
-    if (spec == nullptr) return std::nullopt;
-
-    ByteVec signature(spec->signature_bytes, 0x42);
-    return signature;
+    if (scheme_id == crypto::SCHEME_SCHNORR_SECP256K1) {
+        return SignSchnorr(privkey_bytes, sighash);
+    }
+    if (scheme_id == crypto::SCHEME_ML_DSA_44) {
+        return SignMldsa44(privkey_bytes, sighash);
+    }
+    return std::nullopt;
 }
 
 std::optional<SignedTx> TxBuilder::Sign(const UnsignedTx& utx) {

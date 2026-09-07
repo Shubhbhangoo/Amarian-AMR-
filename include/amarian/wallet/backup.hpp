@@ -7,7 +7,7 @@
 ///   1. Recovery phrase (BIP-39 mnemonic encoding of the 256-bit master seed)
 ///   2. Metadata (schemes in use, account list, highest index per account, labels, birth height)
 ///
-/// The phrase alone is not sufficient — without metadata, recovery requires scanning
+/// The phrase alone is not sufficient - without metadata, recovery requires scanning
 /// a bounded gap of indices across every registered scheme. The birth height limits
 /// that scan to a reasonable range.
 

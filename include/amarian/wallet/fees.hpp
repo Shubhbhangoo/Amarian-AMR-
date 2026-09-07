@@ -5,7 +5,7 @@
 ///
 /// Estimates the fee rate needed for a given confirmation target based on a
 /// rolling window of recent blocks. Presented to the user as three choices:
-/// economical, normal, and priority — with estimated confirmation time.
+/// economical, normal, and priority - with estimated confirmation time.
 
 #include <amarian/primitives/transaction.hpp>
 #include <amarian/util/types.hpp>

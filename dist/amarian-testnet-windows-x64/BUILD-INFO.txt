@@ -1,0 +1,12 @@
+﻿Amarian build information
+  version               : 0.1.0-dev (7a8a8824a92b, modified working tree)
+  protocol version      : 1
+  compiler              : MSVC 19.44.35228.0
+  C++ standard          : 202400
+  build type            : Release
+  target                : Windows/AMD64
+  hardening             : enabled
+  sanitizers            : none
+  libsecp256k1          : 
+  OpenSSL (build)       : 3.6.4
+  OpenSSL (runtime)     : 3.6.4

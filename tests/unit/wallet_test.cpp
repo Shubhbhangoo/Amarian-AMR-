@@ -120,6 +120,20 @@ TEST(WalletAddress, DecodeRejectsWrongHrp) {
     EXPECT_FALSE(decoded.has_value());
 }
 
+TEST(WalletAddress, EncodeAndDecodeRoundTrip) {
+    Lock lock;
+    lock.version = LOCK_VERSION_CONDITION_COMMITMENT;
+    lock.program.resize(32);
+    for (size_t i = 0; i < lock.program.size(); ++i) {
+        lock.program[i] = static_cast<uint8_t>(i * 7U + 3U);
+    }
+    const auto address = LockToAddress(lock, "tamr");
+    ASSERT_TRUE(address.has_value());
+    const auto decoded = AddressToLock(*address, "tamr");
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, lock);
+}
+
 TEST(WalletAddress, DecodeRejectsGarbage) {
     auto decoded = DecodeAddress("amr", "notanaddress");
     EXPECT_FALSE(decoded.has_value());
@@ -330,6 +344,14 @@ TEST(WalletBackup, MnemonicWrongWordCountFails) {
     std::vector<std::string> words = {"abandon", "ability"};
     auto recovered = SeedFromMnemonic(words);
     EXPECT_FALSE(recovered.has_value());
+}
+
+TEST(WalletBackup, MnemonicRoundTripsSeed) {
+    MasterSeed seed = GenerateSeed();
+    auto words = GenerateMnemonic(seed);
+    auto recovered = SeedFromMnemonic(words);
+    ASSERT_TRUE(recovered.has_value());
+    EXPECT_EQ(*recovered, seed);
 }
 
 TEST(WalletBackup, MetadataRoundTrip) {

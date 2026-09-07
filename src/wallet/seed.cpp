@@ -17,7 +17,7 @@
 namespace amarian::wallet {
 namespace {
 
-// --- HKDF-Expand (RFC 5869 §2.3) -------------------------------------------
+// --- HKDF-Expand (RFC 5869 section 2.3) ------------------------------------
 //
 // HKDF-Extract is always HMAC-SHA256(salt=domain_string, ikm=master_seed).
 // The result is a 32-byte pseudorandom key (PRK). Then HKDF-Expand produces
@@ -127,7 +127,7 @@ void DeriveSecp256k1Key(const MasterSeed& seed, uint32_t account, uint32_t index
     // The secp256k1 order is 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141.
     // We derive and then reduce mod (order) by trying until a valid key is found.
     // A simpler approach: derive 32 bytes, that's what libsecp256k1's
-    // `secp256k1_keypair_create` expects — it does its own range check internally.
+    // `secp256k1_keypair_create` expects - it does its own range check internally.
     DeriveKeyBytes(seed, "schnorr-secp256k1", account, index, out_key);
 }
 

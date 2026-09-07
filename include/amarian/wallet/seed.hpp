@@ -12,7 +12,7 @@
 ///         info = account || index
 ///     )
 ///
-/// The output is exactly the number of bytes the scheme's keygen expects — 32 for
+/// The output is exactly the number of bytes the scheme's keygen expects - 32 for
 /// Schnorr, 32 for ML-DSA-44, and the scheme-defined seed lengths for SLH-DSA.
 ///
 /// There is no public derivation. BIP-32's arithmetic on secp256k1 scalars does
@@ -61,7 +61,7 @@ void DeriveSecp256k1Key(const MasterSeed& seed, uint32_t account, uint32_t index
 
 /// Derives a 32-byte ML-DSA-44 seed from the master seed.
 ///
-/// ML-DSA-44 keygen takes exactly 32 bytes as its seed (FIPS 204 §5.1).
+/// ML-DSA-44 keygen takes exactly 32 bytes as its seed (FIPS 204 section 5.1).
 void DeriveMldsa44Seed(const MasterSeed& seed, uint32_t account, uint32_t index,
                        MutableByteSpan out_seed);
 

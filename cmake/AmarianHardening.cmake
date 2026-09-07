@@ -10,6 +10,11 @@ function(amarian_apply_hardening target)
         return()
     endif()
 
+    if(MSVC)
+        target_compile_options(${target} INTERFACE /guard:cf /sdl)
+        return()
+    endif()
+
     set(hardening_compile
         -fstack-protector-strong
         -fno-strict-aliasing

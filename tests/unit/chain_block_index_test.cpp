@@ -421,6 +421,29 @@ TEST(NextTargetBits, TheAsertRuleIsNeverEasierThanTheFloor) {
     EXPECT_TRUE(CompactToTarget(bits).has_value());
 }
 
+TEST(NextTargetBits, TestnetUsesMinimumDifficultyAfterAHashrateGap) {
+    BlockIndexEntry tip;
+    tip.height = 100;
+    tip.header.height = 100;
+    // Put the parent ahead of schedule so ordinary ASERT is visibly harder than
+    // the floor; otherwise this test could pass while the escape hatch did nothing.
+    tip.header.timestamp = TESTNET_PARAMS.genesis_timestamp + 100 * 300 - 100000;
+
+    const uint32_t ordinary = NextTargetBits(tip, tip.header.timestamp + 600, TESTNET_PARAMS);
+    const uint32_t escaped = NextTargetBits(tip, tip.header.timestamp + 601, TESTNET_PARAMS);
+    EXPECT_EQ(escaped, TESTNET_PARAMS.pow_limit_bits);
+    EXPECT_NE(ordinary, TESTNET_PARAMS.pow_limit_bits);
+}
+
+TEST(NextTargetBits, MainnetDoesNotUseTheMinimumDifficultyEscapeHatch) {
+    BlockIndexEntry tip;
+    tip.height = 100;
+    tip.header.height = 100;
+    tip.header.timestamp = MAINNET_PARAMS.genesis_timestamp + 100 * 300 - 100000;
+    EXPECT_NE(NextTargetBits(tip, tip.header.timestamp + 601, MAINNET_PARAMS),
+              MAINNET_PARAMS.pow_limit_bits);
+}
+
 TEST(BlockIndexEntry, AncestorWalksToAGivenHeight) {
     BlockIndex index = BlockIndex::ForNetwork(Params());
     const BlockIndexEntry* first = Extend(index, index.Genesis(), 1);

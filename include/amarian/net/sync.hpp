@@ -18,7 +18,6 @@
 #include <amarian/chain/block_index.hpp>
 #include <amarian/consensus/params.hpp>
 #include <amarian/net/message.hpp>
-#include <amarian/net/message.hpp>
 #include <amarian/net/protocol.hpp>
 
 #include <functional>
@@ -75,7 +74,6 @@ public:
 
 private:
     const chain::BlockIndex& index_;
-    const ChainParams& params_;
     SyncCallbacks callbacks_;
     SyncState state_ = SyncState::AwaitingGetHeaders;
     Hash256 remote_tip_;

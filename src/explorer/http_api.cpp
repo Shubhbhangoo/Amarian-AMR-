@@ -27,6 +27,12 @@ using json = nlohmann::json;
 
 namespace {
 
+constexpr std::string_view EXPLORER_PAGE = R"HTML(<!doctype html>
+<html><head><meta charset="utf-8"><title>Amarian Testnet Explorer</title>
+<style>body{font:16px system-ui;background:#10141c;color:#e8edf5;max-width:900px;margin:40px auto;padding:0 20px}code,pre{background:#1b2330;padding:12px;border-radius:8px;display:block;overflow:auto}h1{color:#7dd3fc}.card{background:#17202c;border-radius:10px;padding:16px;margin:14px 0}</style>
+</head><body><h1>Amarian Testnet Explorer</h1><div class="card"><b>Status</b><pre id="status">Loading…</pre></div><div class="card"><b>Tip</b><pre id="tip">Loading…</pre></div><div class="card"><b>Mempool</b><pre id="mempool">Loading…</pre></div>
+<script>async function load(){for(const n of ['status','tip','mempool']){try{const r=await fetch('/explorer/'+n);document.getElementById(n).textContent=JSON.stringify(await r.json(),null,2)}catch(e){document.getElementById(n).textContent='Explorer unavailable: '+e}}}load();setInterval(load,5000)</script></body></html>)HTML";
+
 /// Split a path into segments. Leading and trailing slashes are stripped; empty segments
 /// are skipped.
 [[nodiscard]] std::vector<std::string_view> PathSegments(std::string_view path) {
@@ -136,7 +142,9 @@ json MempoolJson(const mempool::Mempool* pool) {
         item["txid"] = entry->txid.ToHex();
         item["fee"] = entry->fee;
         item["weight"] = entry->weight;
-        item["fee_rate"] = entry->fee_rate;
+        item["fee_rate"] = entry->weight == 0
+                                ? 0
+                                : entry->fee / static_cast<int64_t>(entry->weight);
         list.push_back(std::move(item));
     }
     return list;
@@ -158,10 +166,8 @@ ExplorerReply Route(const chain::ChainState& state, const chain::BlockIndex& /*i
     if (path.empty() || path == "/") {
         return ExplorerReply{
             .http_status = 200,
-            .body = json{{"service", "amarian explorer API"},
-                         {"version", "0.1"},
-                         {"tip", TipJson(state)}}
-                        .dump()};
+            .body = std::string(EXPLORER_PAGE),
+            .content_type = "text/html; charset=utf-8"};
     }
 
     // Clamp path length

@@ -7,7 +7,7 @@
 ///
 ///   <hrp>1<version><32-byte commitment><6-char checksum>
 ///
-/// It encodes a Lock commitment — the 32-byte TaggedHash of a SpendCondition.
+/// It encodes a Lock commitment - the 32-byte TaggedHash of a SpendCondition.
 /// For version 1 (condition commitment) the program is exactly 32 bytes.
 ///
 /// The human-readable prefix (HRP) is not yet chosen and will be fixed during

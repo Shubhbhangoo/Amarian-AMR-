@@ -10,7 +10,9 @@
 #include <amarian/crypto/signature.hpp>
 #include <amarian/primitives/lock.hpp>
 #include <amarian/primitives/transaction.hpp>
+#include <amarian/primitives/block.hpp>
 #include <amarian/wallet/backup.hpp>
+#include <amarian/wallet/coinselection.hpp>
 #include <amarian/wallet/fees.hpp>
 #include <amarian/wallet/seed.hpp>
 #include <amarian/wallet/wallet.hpp>
@@ -78,6 +80,9 @@ public:
     [[nodiscard]] Balance GetBalance() const;
     void SetBalance(const Balance& balance) { balance_ = balance; }
 
+    /// Rebuilds wallet-owned UTXOs from the active chain, starting at birth height.
+    void Rescan(const std::vector<std::pair<Block, uint32_t>>& blocks);
+
     // --- Receive ---
     /// Generates a fresh receive address for the given account.
     [[nodiscard]] AddressInfo GetNewAddress(uint32_t account_id = 0);
@@ -118,6 +123,8 @@ private:
     std::string node_url_;
     const ChainParams* params_ = nullptr;
     mutable uint32_t next_index_by_account_[64] = {};
+    std::vector<UtxoEntry> utxos_;
+    uint32_t tip_height_ = 0;
 
     /// Derives a lock from a key at (account, index).
     [[nodiscard]] Lock DeriveLock(uint32_t account_id, uint32_t index) const;

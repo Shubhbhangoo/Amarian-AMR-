@@ -29,10 +29,6 @@ size_t InputWeight(size_t sig_bytes) {
     return (36 * WITNESS_SCALE_FACTOR) + sig_bytes;
 }
 
-/// The weight of a change output: amount (8) + lock version (1) + compact-size program (1+32).
-/// ML-DSA commitment is 32 bytes.
-constexpr size_t CHANGE_OUTPUT_WEIGHT = 4 * (8 + 1 + 1 + 32);
-
 /// Standard output weight for a condition-commitment output.
 constexpr size_t OUTPUT_WEIGHT = 4 * (8 + 1 + 1 + 32);
 

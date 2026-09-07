@@ -5,10 +5,12 @@
 
 #include <amarian/crypto/hash.hpp>
 #include <amarian/crypto/signature.hpp>
+#include <amarian/util/hex.hpp>
 #include <amarian/primitives/coin.hpp>
 #include <amarian/primitives/lock.hpp>
 #include <amarian/primitives/sighash.hpp>
 #include <amarian/wallet/address.hpp>
+#include <amarian/wallet/signing.hpp>
 #include <amarian/wallet/txbuilder.hpp>
 
 #include <algorithm>
@@ -39,6 +41,13 @@ std::string_view HrpFor(const ChainParams& params) {
 Wallet::Wallet(std::string_view db_path, std::string_view password,
                const ChainParams& params)
     : db_(std::string(db_path), password), params_(&params) {
+    if (db_.HasSeed()) {
+        if (const auto stored = db_.LoadSeed(password); stored.has_value() &&
+            stored->size() == SEED_BYTES) {
+            std::memcpy(seed_.data(), stored->data(), SEED_BYTES);
+            return;
+        }
+    }
     seed_ = GenerateSeed();
     db_.StoreSeed(ByteSpan(seed_.data(), seed_.size()), password);
     db_.SetBirthHeight(0);
@@ -60,21 +69,91 @@ Wallet::~Wallet() = default;
 std::optional<Wallet> Wallet::Open(std::string_view db_path,
                                    std::string_view password,
                                    const ChainParams& params) {
-    WalletDb db(std::string(db_path), password);
-    if (!db.HasSeed()) return std::nullopt;
-
-    auto seed_bytes = db.LoadSeed(password);
-    if (!seed_bytes.has_value() || seed_bytes->size() != SEED_BYTES) {
-        return std::nullopt;
-    }
-
     Wallet wallet(db_path, password, params);
+    if (!wallet.db_.HasSeed()) return std::nullopt;
+    const auto seed_bytes = wallet.db_.LoadSeed(password);
+    if (!seed_bytes.has_value() || seed_bytes->size() != SEED_BYTES) return std::nullopt;
     std::memcpy(wallet.seed_.data(), seed_bytes->data(), SEED_BYTES);
     return wallet;
 }
 
 Balance Wallet::GetBalance() const {
     return balance_;
+}
+
+void Wallet::Rescan(const std::vector<std::pair<Block, uint32_t>>& blocks) {
+    utxos_.clear();
+    balance_ = {};
+    tip_height_ = blocks.empty() ? 0 : blocks.back().second;
+
+    struct OwnedLock {
+        Lock lock;
+        uint32_t account = 0;
+        uint32_t index = 0;
+    };
+    std::vector<OwnedLock> owned;
+    for (size_t account_index = 0; account_index < db_.AccountCount(); ++account_index) {
+        const auto account = db_.GetAccount(account_index);
+        if (!account.has_value()) continue;
+        for (uint32_t index = 0; index <= account->highest_derived; ++index) {
+            owned.push_back({DeriveLock(account->account_id, index), account->account_id, index});
+        }
+    }
+
+    for (const auto& [block, height] : blocks) {
+        for (const auto& tx : block.transactions) {
+            int64_t my_spent = 0;
+            int64_t my_received = 0;
+            bool touches_wallet = false;
+
+            for (const auto& input : tx.inputs) {
+                for (auto it = utxos_.begin(); it != utxos_.end();) {
+                    if (it->outpoint == input.outpoint) {
+                        touches_wallet = true;
+                        my_spent += it->coin.output.amount;
+                        it = utxos_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            for (size_t output_index = 0; output_index < tx.outputs.size(); ++output_index) {
+                for (const auto& match : owned) {
+                    if (tx.outputs[output_index].lock != match.lock) continue;
+                    touches_wallet = true;
+                    my_received += tx.outputs[output_index].amount;
+                    utxos_.push_back(UtxoEntry{
+                        .outpoint = OutPoint{tx.Txid(), static_cast<uint32_t>(output_index)},
+                        .coin = Coin{tx.outputs[output_index], height, tx.IsCoinbase()},
+                        .confirmed = true,
+                        .account_id = match.account,
+                        .derivation_index = match.index});
+                    break;
+                }
+            }
+            if (touches_wallet) {
+                StoredTransaction stx;
+                stx.txid = tx.Txid();
+                stx.height = static_cast<int32_t>(height);
+                stx.received = my_received;
+                stx.sent = my_spent;
+                stx.fee = (my_spent > my_received && !tx.IsCoinbase()) ? (my_spent - my_received) : 0;
+                db_.StoreTx(stx);
+            }
+        }
+    }
+
+    for (const auto& entry : utxos_) {
+        if (!entry.coin.is_coinbase ||
+            tip_height_ >= entry.coin.height + params_->coinbase_maturity) {
+            balance_.confirmed += entry.coin.output.amount;
+        } else {
+            // The reward is owned by this wallet, but consensus still prevents
+            // spending it until coinbase maturity. Reporting it as pending keeps
+            // the GUI and RPC honest without making it selectable by Send().
+            balance_.pending += entry.coin.output.amount;
+        }
+    }
 }
 
 Lock Wallet::DeriveLock(uint32_t account_id, uint32_t index) const {
@@ -92,7 +171,11 @@ Lock Wallet::DeriveLock(uint32_t account_id, uint32_t index) const {
     condition.threshold = 1;
     condition.keys.resize(1);
     condition.keys[0].scheme = crypto::SCHEME_SCHNORR_SECP256K1;
-    condition.keys[0].bytes = ByteVec(key_bytes.begin(), key_bytes.end());
+    const auto keypair = GenerateSchnorrKey(ByteSpan(key_bytes.data(), key_bytes.size()));
+    if (!keypair.has_value()) {
+        return Lock{1, ByteVec(32, 0)};
+    }
+    condition.keys[0].bytes = keypair->public_key;
 
     const Hash256 commitment = SpendConditionCommitment(condition);
 
@@ -152,10 +235,22 @@ Wallet::Send(std::string_view address, int64_t amount, int64_t fee_rate) {
 std::optional<SendResult>
 Wallet::SendToLock(const Lock& lock, int64_t amount, int64_t fee_rate) {
     TxBuilder builder(seed_, std::string(DEFAULT_SCHEME), DEFAULT_ACCOUNT);
+    builder.SetChainId(params_->chain_id);
     builder.AddRecipient(lock, amount);
 
     std::vector<UtxoEntry> utxos;
+    for (const auto& entry : utxos_) {
+        if (!entry.confirmed) continue;
+        if (entry.coin.is_coinbase &&
+            tip_height_ < entry.coin.height + params_->coinbase_maturity) continue;
+        utxos.push_back(entry);
+    }
     builder.SetUtxos(utxos);
+
+    if (fee_rate <= 0) {
+        fee_rate = DEFAULT_FEERATE;
+    }
+    builder.SetFeeRate(fee_rate);
 
     if (fee_rate <= 0) {
         fee_rate = DEFAULT_FEERATE;
@@ -174,6 +269,15 @@ Wallet::SendToLock(const Lock& lock, int64_t amount, int64_t fee_rate) {
 
     Writer writer;
     signed_tx->tx.Serialize(writer);
+    result.raw_tx_hex = ToHex(writer.Take());
+
+    StoredTransaction stx;
+    stx.txid = result.txid;
+    stx.height = -1;
+    stx.sent = amount;
+    stx.received = 0;
+    stx.fee = result.fee;
+    db_.StoreTx(stx);
 
     return result;
 }
@@ -196,6 +300,14 @@ bool Wallet::RestoreFromBackup(const WalletBackup& backup) {
 
     seed_ = *seed;
     db_.StoreSeed(ByteSpan(seed_.data(), seed_.size()), "");
+
+    // A mnemonic-only restore is still useful for the common default account. Full
+    // backups may carry metadata, but the seed alone must not be rejected just because
+    // the caller did not export that optional section.
+    if (backup.metadata.empty()) {
+        db_.SetBirthHeight(0);
+        return true;
+    }
 
     if (!DeserialiseMetadata(backup.metadata, db_)) {
         return false;

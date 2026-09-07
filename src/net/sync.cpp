@@ -46,7 +46,9 @@ namespace {
 
 Sync::Sync(const chain::BlockIndex& index, const ChainParams& params,
            const SyncCallbacks& callbacks)
-    : index_(index), params_(params), callbacks_(callbacks) {}
+    : index_(index), callbacks_(callbacks) {
+    (void)params;
+}
 
 void Sync::Start() {
     GetHeadersPayload getheaders;
@@ -70,7 +72,7 @@ std::vector<Hash256> Sync::OnHeaders(const HeadersPayload& headers) {
         return blocks_to_request;
     }
 
-    // Validate each header in sequence. The index is const here — headers are
+    // Validate each header in sequence. The index is const here â€” headers are
     // added externally via the peer. We just report what to request.
     
 
