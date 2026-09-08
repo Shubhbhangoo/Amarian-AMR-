@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08090b">
+  <meta name="description" content="Amarian is an independent proof-of-work blockchain built from scratch in C++23.">
+  <title>Amarian | Digital diamond.</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <header class="nav shell">
+    <a class="brand" href="#top" aria-label="Amarian home"><span class="diamond">◆</span> AMARIAN</a>
+    <nav>
+      <a href="#architecture">Architecture</a>
+      <a href="#protocol">Protocol</a>
+      <a href="#economics">Economics</a>
+      <a href="#build">Build</a>
+    </nav>
+    <a class="nav-cta" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">GitHub ↗</a>
+  </header>
+
+  <main id="top">
+    <section class="hero shell">
+      <div class="hero-copy reveal">
+        <div class="eyebrow"><span class="pulse"></span> PHASES 0–12 COMPLETE</div>
+        <h1>Digital<br><em>diamond.</em></h1>
+        <p class="lede">An independent proof-of-work blockchain built from scratch in C++23, engineered around scarcity, auditability and a post-quantum future.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">Explore the source <span>↗</span></a>
+          <a class="button ghost" href="#architecture">See the architecture <span>↓</span></a>
+        </div>
+        <p class="disclaimer">Engineering project. No promise of value, investment offering or price prediction.</p>
+      </div>
+      <div class="hero-art reveal" aria-hidden="true">
+        <div class="orbit orbit-a"></div><div class="orbit orbit-b"></div>
+        <div class="gem"><i></i><b></b><span></span></div>
+        <div class="hash">SHA-256d<br><small>PROOF OF WORK</small></div>
+        <div class="block block-1">0000…7A9C</div>
+        <div class="block block-2">0000…C1E4</div>
+        <div class="block block-3">0000…44B2</div>
+      </div>
+    </section>
+
+    <section class="ticker-bar"><div class="ticker-inner"><span>BUILT FROM SCRATCH</span><i>·</i><span>C++23</span><i>·</i><span>UTXO</span><i>·</i><span>SHA-256d</span><i>·</i><span>POST-QUANTUM READY</span><i>·</i><span>NO PREMINE</span></div></section>
+
+    <section id="protocol" class="section shell">
+      <div class="section-head reveal"><span class="kicker">01 / PROTOCOL</span><h2>Small rules.<br><span>Hard guarantees.</span></h2><p>Amarian keeps consensus deliberately narrow. Every node independently derives what is valid from deterministic rules.</p></div>
+      <div class="feature-grid">
+        <article class="feature reveal"><span class="num">01</span><h3>Fixed supply</h3><p>Exactly 83,999,999,932,170,000 facets are the realised maximum supply. No premine, tail emission or mint authority.</p><strong>8.4M AMR target</strong></article>
+        <article class="feature reveal"><span class="num">02</span><h3>Proof of work</h3><p>Bitcoin-derived SHA-256d secures the chain. Difficulty targets are selected for stability rather than novelty.</p><strong>300s target interval</strong></article>
+        <article class="feature reveal"><span class="num">03</span><h3>Integer money</h3><p>All monetary values are integer base units. Floating point never enters consensus arithmetic.</p><strong>1 AMR = 10¹⁰ facets</strong></article>
+        <article class="feature reveal"><span class="num">04</span><h3>Quantum-aware</h3><p>Spend conditions carry explicit algorithm identifiers from the first block, making cryptographic agility a protocol property.</p><strong>Scheme registry</strong></article>
+      </div>
+    </section>
+
+    <section id="architecture" class="section architecture">
+      <div class="shell">
+        <div class="section-head reveal"><span class="kicker">02 / ARCHITECTURE</span><h2>The absent edge<br><span>is the feature.</span></h2><p>Consensus cannot reach storage, networking, wallet or RPC. The build system enforces that boundary.</p></div>
+        <div class="arch-panel reveal">
+          <div class="arch-layer"><span>util</span><small>bytes · hashing · checked arithmetic</small></div>
+          <div class="arrow">↓</div>
+          <div class="arch-layer"><span>crypto</span><small>SHA-256 · signatures · scheme registry</small></div>
+          <div class="arrow">↓</div>
+          <div class="arch-layer hot"><span>primitives</span><small>transactions · blocks · Merkle trees</small></div>
+          <div class="arrow">↓</div>
+          <div class="arch-layer core"><span>consensus</span><small>issuance · PoW · validation · accumulated work</small></div>
+          <div class="branch"><span>utxo</span><span>chain</span><span>storage</span></div>
+          <div class="side-row"><span>mempool</span><span>mining</span><span>net</span><span>wallet</span><span>rpc</span><span>node</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section shell split">
+      <div class="copy reveal"><span class="kicker">03 / THE NODE</span><h2>Everything needed to<br><span>run the chain.</span></h2><p>From a fresh data directory to synchronized peers, Amarian already has the machinery for a validating node.</p><a class="text-link" href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noreferrer">Read the architecture record ↗</a></div>
+      <div class="terminal reveal"><div class="terminal-top"><span></span><span></span><span></span><label>amariand</label></div><pre><code><b>$</b> ./build/dev/src/amariand \
+    --chain regtest \
+    --generate 5
+
+<span>chain</span>     regtest
+<span>mining</span>    5 blocks
+<span>consensus</span> self-checked
+<span>storage</span>   RocksDB
+
+<span class="ok">✓ tip height 5</span>
+<span class="muted">  node ready</span></code></pre></div>
+    </section>
+
+    <section id="economics" class="section economics">
+      <div class="shell">
+        <div class="section-head reveal"><span class="kicker">04 / ECONOMICS</span><h2>Scarcity by<br><span>construction.</span></h2><p>The issuance schedule is a pure function of block height. No clock, vote or key can change it.</p></div>
+        <div class="stats reveal">
+          <div><span>MAX SUPPLY</span><strong>8.4M</strong><small>AMR target</small></div>
+          <div><span>BLOCK TIME</span><strong>300s</strong><small>5 minute target</small></div>
+          <div><span>DECAY</span><strong>7 / 8</strong><small>per era</small></div>
+          <div><span>FINAL ISSUANCE</span><strong>~178.7y</strong><small>from genesis</small></div>
+        </div>
+        <div class="curve reveal"><div class="curve-line"></div><div class="curve-label l1">50% · year 6</div><div class="curve-label l2">90% · year 18</div><div class="curve-label l3">99% · year 35</div><div class="curve-axis"><span>GENESIS</span><span>178.7 YEARS</span></div></div>
+      </div>
+    </section>
+
+    <section class="section shell split verification">
+      <div class="copy reveal"><span class="kicker">05 / VERIFICATION</span><h2>Don't trust the<br><span>homepage.</span></h2><p>Trust the code, tests and measurements. The repository includes unit and consensus tests, integration workflows, fuzz harnesses, sanitizers and benchmarks.</p><div class="checks"><span>✓ C++23 + CMake/Ninja</span><span>✓ ASan + UBSan</span><span>✓ libFuzzer harnesses</span><span>✓ reproducible measurements</span></div></div>
+      <div class="measurement reveal"><div class="measurement-title">ENGINEERING STATUS</div><div class="meter"><span style="width:92%"></span></div><div class="measurement-row"><strong>12</strong><span>completed phases</span></div><div class="measurement-row"><strong>13</strong><span>next: mainnet readiness</span></div><div class="measurement-row"><strong>∞</strong><span>reasons to audit</span></div></div>
+    </section>
+
+    <section id="build" class="section build shell">
+      <div class="build-card reveal"><div><span class="kicker">06 / BUILD IT</span><h2>Run it yourself.</h2><p>Clone the source. Build the node. Let the node judge the blocks.</p></div><div class="command"><code>cmake --preset dev && cmake --build build/dev && ctest --preset dev</code><button id="copy" type="button">COPY</button></div></div>
+    </section>
+
+    <section class="section docs shell">
+      <div class="section-head reveal"><span class="kicker">07 / READ THE RECORD</span><h2>The details are<br><span>in the repo.</span></h2></div>
+      <div class="doc-grid">
+        <a class="doc reveal" href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/AMARIAN_PROTOCOL.md" target="_blank" rel="noreferrer"><span>PROTOCOL</span><strong>AMARIAN_PROTOCOL.md ↗</strong></a>
+        <a class="doc reveal" href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PQ_CRYPTO.md" target="_blank" rel="noreferrer"><span>CRYPTOGRAPHY</span><strong>PQ_CRYPTO.md ↗</strong></a>
+        <a class="doc reveal" href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/THREAT_MODEL.md" target="_blank" rel="noreferrer"><span>SECURITY</span><strong>THREAT_MODEL.md ↗</strong></a>
+        <a class="doc reveal" href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PHASE12_MEASUREMENTS.md" target="_blank" rel="noreferrer"><span>MEASUREMENTS</span><strong>PHASE12_MEASUREMENTS.md ↗</strong></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer shell"><a class="brand" href="#top"><span class="diamond">◆</span> AMARIAN</a><p>Independent engineering project. MIT licensed.</p><a href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
+  <script src="script.js"></script>
+</body>
+</html>
