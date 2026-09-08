@@ -1,78 +1,85 @@
 /* AMARIAN / CONTRAST SAFETY LAYER */
-/* Content always wins over decoration. */
+/* Content always wins over decoration. Every text surface gets an explicit foreground. */
 
-.hero .eyebrow,.chapter .eyebrow,.economics .eyebrow,.verify .eyebrow{color:var(--ink)!important}
-.hero-text,.chapter-head>p,.object-copy>p:not(.eyebrow),.hero-bottom{color:#30363d!important}
+.hero .eyebrow,.chapter .eyebrow,.economics .eyebrow,.verify .eyebrow{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+.hero-text,.chapter-head>p,.object-copy>p:not(.eyebrow),.hero-bottom{color:#30363d!important;-webkit-text-fill-color:#30363d!important}
 
 /* Hero */
 .hero-copy{z-index:20!important}
-.hero h1{color:var(--ink)!important;text-shadow:none!important}
-.hero h1 em{color:var(--blue)!important}
+.hero h1{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important;text-shadow:none!important}
+.hero h1 em{color:var(--blue)!important;-webkit-text-fill-color:var(--blue)!important}
 .hero .hero-text{background:var(--paper)!important;box-shadow:8px 0 0 var(--paper),-8px 0 0 var(--paper)!important}
 .hero-buttons{position:relative!important;z-index:21!important}
 .hero-bottom{background:var(--paper)!important}
 
 /* Red statement */
 .statement{color:var(--paper)!important}
-.statement .eyebrow,.statement-copy h2,.statement-copy>p:not(.eyebrow),.statement .mini-spec span{color:var(--paper)!important}
-.statement-copy h2 em,.statement-copy .mini-spec strong{color:var(--lime)!important}
+.statement .eyebrow,.statement-copy h2,.statement-copy>p:not(.eyebrow),.statement .mini-spec span{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.statement-copy h2 em,.statement-copy .mini-spec strong{color:var(--lime)!important;-webkit-text-fill-color:var(--lime)!important}
 .statement-copy{position:relative!important;z-index:5!important}
 
 /* Protocol cards */
-.cap,.cap-body,.cap-body h3,.cap-body p,.cap-body>span,.cap-visual,.hash-label,.decimal{color:var(--ink)!important}
+.cap,.cap-body,.cap-body h3,.cap-body p,.cap-body>span,.cap-visual,.hash-label,.decimal{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
 .cap:nth-child(1),.cap:nth-child(2),.cap:nth-child(3){color:var(--ink)!important}
 .cap-body p{background:transparent!important}
 
-/* ARCHITECTURE / CONSENSUS DIAGRAM: explicit stacking and contrast */
+/* ARCHITECTURE / CONSENSUS DIAGRAM
+   Every node owns its own background + foreground. No inherited text color is allowed. */
 .network-section{color:var(--paper)!important}
-.network-section .chapter-head h2,.network-section .chapter-head .eyebrow{color:var(--paper)!important}
-.network-section .chapter-head h2 em{color:var(--lime)!important}
-.network-section .chapter-head>p{color:#f4f6fb!important}
+.network-section .chapter-head h2,.network-section .chapter-head .eyebrow{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.network-section .chapter-head h2 em{color:var(--lime)!important;-webkit-text-fill-color:var(--lime)!important}
+.network-section .chapter-head>p{color:#f4f6fb!important;-webkit-text-fill-color:#f4f6fb!important}
 .network-visual{position:relative!important;isolation:isolate!important;overflow:hidden!important}
 .network-lines{position:absolute!important;inset:0!important;z-index:0!important;pointer-events:none!important}
 .network-lines *{pointer-events:none!important}
 .network-visual .node{position:absolute!important;z-index:5!important;isolation:isolate!important;mix-blend-mode:normal!important;text-shadow:none!important}
-.network-visual .node strong,.network-visual .node small,.network-visual .node span{position:relative!important;z-index:2!important;mix-blend-mode:normal!important}
-.network-visual .node:not(.core){background:var(--paper)!important;color:var(--ink)!important;border-color:var(--ink)!important}
-.network-visual .node:not(.core) strong{color:var(--ink)!important}
-.network-visual .node:not(.core) small,.network-visual .node:not(.core) span{color:#343a40!important}
-.network-visual .node.core{background:var(--red)!important;color:var(--paper)!important;border-color:var(--ink)!important}
-.network-visual .node.core strong,.network-visual .node.core small,.network-visual .node.core span{color:var(--paper)!important}
-.network-caption{position:absolute!important;z-index:6!important;color:var(--paper)!important;background:#1b3988!important;padding:4px 7px!important}
+.network-visual .node *{position:relative!important;z-index:2!important;mix-blend-mode:normal!important;text-shadow:none!important}
+
+/* Outer nodes: paper background, ink text */
+.network-visual .node:not(.core){background:#f4f2ed!important;color:#111318!important;border-color:#111318!important}
+.network-visual .node:not(.core) strong{color:#111318!important;-webkit-text-fill-color:#111318!important}
+.network-visual .node:not(.core) small,.network-visual .node:not(.core) span{color:#343a40!important;-webkit-text-fill-color:#343a40!important}
+
+/* Consensus node: red background, cream text */
+.network-visual .node.core{background:#a83b32!important;color:#f4f2ed!important;border-color:#111318!important}
+.network-visual .node.core strong,.network-visual .node.core small,.network-visual .node.core span{color:#f4f2ed!important;-webkit-text-fill-color:#f4f2ed!important}
+
+/* Diagram caption: blue background, cream text */
+.network-caption{position:absolute!important;z-index:6!important;color:#f4f2ed!important;-webkit-text-fill-color:#f4f2ed!important;background:#1b3988!important;padding:5px 8px!important}
 
 /* Physical model */
 .object-section{color:var(--paper)!important}
-.object-section .scene-marker,.object-copy .eyebrow,.object-copy h2,.object-copy>p:not(.eyebrow),.object-copy .arrow-link{color:var(--paper)!important}
-.object-copy h2 em{color:var(--yellow)!important}
+.object-section .scene-marker,.object-copy .eyebrow,.object-copy h2,.object-copy>p:not(.eyebrow),.object-copy .arrow-link{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.object-copy h2 em{color:var(--yellow)!important;-webkit-text-fill-color:var(--yellow)!important}
 .measurement{color:var(--ink)!important;background:var(--lime)!important}
-.measurement span,.measurement strong{color:var(--ink)!important}
+.measurement span,.measurement strong{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
 
 /* Economics */
-.economics,.economics .chapter-head h2,.economics .chapter-head .eyebrow,.economics .chapter-head>p{color:var(--ink)!important}
-.economics .chapter-head h2 em{color:var(--red)!important}
-.axis{color:var(--paper)!important}
-.curve-value{color:var(--yellow)!important;text-shadow:0 1px 8px #000!important}
+.economics,.economics .chapter-head h2,.economics .chapter-head .eyebrow,.economics .chapter-head>p{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+.economics .chapter-head h2 em{color:var(--red)!important;-webkit-text-fill-color:var(--red)!important}
+.axis{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.curve-value{color:var(--yellow)!important;-webkit-text-fill-color:var(--yellow)!important;text-shadow:0 1px 8px #000!important}
 
 /* Terminal */
 .node-section{color:var(--paper)!important}
-.node-copy .eyebrow{color:var(--gold)!important}
-.node-copy h2,.node-copy>p:not(.eyebrow),.checks span{color:var(--paper)!important}
-.node-copy h2 em{color:var(--lime)!important}
+.node-copy .eyebrow{color:var(--gold)!important;-webkit-text-fill-color:var(--gold)!important}
+.node-copy h2,.node-copy>p:not(.eyebrow),.checks span{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.node-copy h2 em{color:var(--lime)!important;-webkit-text-fill-color:var(--lime)!important}
 
 /* Build */
-.build-section,.build-section .scene-marker,.build-section .eyebrow,.build-section h2{color:var(--ink)!important}
-.build-section h2 em{color:var(--blue)!important}
-.command code{color:var(--ink)!important}
+.build-section,.build-section .scene-marker,.build-section .eyebrow,.build-section h2{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+.build-section h2 em{color:var(--blue)!important;-webkit-text-fill-color:var(--blue)!important}
+.command code{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
 
 /* Verification */
-.verify,.verify .scene-marker,.verify .eyebrow,.verify-top h2{color:var(--paper)!important}
-.verify-top h2 span{color:var(--lime)!important}
-.doc,.doc b,.doc small,.doc span{color:var(--ink)!important}
-.doc:nth-child(4),.doc:nth-child(4) b,.doc:nth-child(4) small,.doc:nth-child(4) span{color:var(--paper)!important}
+.verify,.verify .scene-marker,.verify .eyebrow,.verify-top h2{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.verify-top h2 span{color:var(--lime)!important;-webkit-text-fill-color:var(--lime)!important}
+.doc,.doc b,.doc small,.doc span{color:var(--ink)!important;-webkit-text-fill-color:var(--ink)!important}
+.doc:nth-child(4),.doc:nth-child(4) b,.doc:nth-child(4) small,.doc:nth-child(4) span{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
 
 /* Footer */
-.footer,.footer p,.footer a{color:var(--paper)!important}
-.footer a:last-child{color:var(--lime)!important}
+.footer,.footer p,.footer a{color:var(--paper)!important;-webkit-text-fill-color:var(--paper)!important}
+.footer a:last-child{color:var(--lime)!important;-webkit-text-fill-color:var(--lime)!important}
 
 /* Decorative layers never paint over readable content */
 .hero-object,.statement-image,.large-object,.network-visual,.emission-visual{isolation:isolate!important}
