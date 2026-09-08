@@ -1,0 +1,15 @@
+exclude:
+  - dist
+  - build
+  - cmake-build-*
+  - tests
+  - fuzz
+  - bench
+  - src
+  - include
+  - docs
+  - CMakeLists.txt
+  - CMakePresets.json
+  - '*.cpp'
+  - '*.hpp'
+  - '*.h'
