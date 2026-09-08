@@ -1,0 +1,78 @@
+/* AMARIAN / CONTRAST SAFETY LAYER */
+/* Keep expressive surfaces, but never let content disappear into them. */
+
+/* Global text hierarchy */
+.hero .eyebrow,.chapter .eyebrow,.economics .eyebrow,.verify .eyebrow{color:var(--ink)!important}
+.hero-text,.chapter-head>p,.object-copy>p:not(.eyebrow),.hero-bottom{color:#3f454b!important}
+
+/* Hero */
+.hero-copy{z-index:20!important}
+.hero h1{color:var(--ink)!important;text-shadow:none!important}
+.hero h1 em{color:var(--blue)!important}
+.hero .hero-text{background:var(--paper)!important;box-shadow:8px 0 0 var(--paper),-8px 0 0 var(--paper)!important}
+.hero-buttons{position:relative!important;z-index:21!important}
+.hero-bottom{background:var(--paper)!important}
+
+/* Red statement: all copy stays light */
+.statement{color:var(--paper)!important}
+.statement .eyebrow,.statement-copy h2,.statement-copy>p:not(.eyebrow),.statement .mini-spec span{color:var(--paper)!important}
+.statement-copy h2 em,.statement-copy .mini-spec strong{color:var(--lime)!important}
+.statement-copy{position:relative!important;z-index:5!important}
+
+/* Protocol cards: force dark ink on every light surface */
+.cap,.cap-body,.cap-body h3,.cap-body p,.cap-body>span,.cap-visual,.hash-label,.decimal{color:var(--ink)!important}
+.cap:nth-child(1),.cap:nth-child(2),.cap:nth-child(3){color:var(--ink)!important}
+.cap-body p{background:transparent!important}
+
+/* Blue architecture field */
+.network-section{color:var(--paper)!important}
+.network-section .chapter-head h2,.network-section .chapter-head .eyebrow{color:var(--paper)!important}
+.network-section .chapter-head h2 em{color:var(--lime)!important}
+.network-section .chapter-head>p{color:#eef2fb!important}
+.node strong{color:var(--ink)!important}
+.node small,.node span{color:#30353a!important}
+.node.core,.node.core strong,.node.core small,.node.core span{color:var(--paper)!important}
+.network-caption{color:var(--paper)!important}
+
+/* Physical model: red field needs cream copy */
+.object-section{color:var(--paper)!important}
+.object-section .scene-marker,.object-copy .eyebrow,.object-copy h2,.object-copy>p:not(.eyebrow),.object-copy .arrow-link{color:var(--paper)!important}
+.object-copy h2 em{color:var(--yellow)!important}
+.measurement{color:var(--ink)!important}
+
+/* Economics: cream field, dark copy */
+.economics,.economics .chapter-head h2,.economics .chapter-head .eyebrow,.economics .chapter-head>p{color:var(--ink)!important}
+.economics .chapter-head h2 em{color:var(--red)!important}
+.axis{color:var(--paper)!important}
+.curve-value{color:var(--yellow)!important;text-shadow:0 1px 8px #000!important}
+
+/* Terminal */
+.node-section{color:var(--paper)!important}
+.node-copy .eyebrow{color:var(--gold)!important}
+.node-copy h2,.node-copy>p:not(.eyebrow),.checks span{color:var(--paper)!important}
+.node-copy h2 em{color:var(--lime)!important}
+
+/* Acid build field: never use pale-on-acid */
+.build-section,.build-section .scene-marker,.build-section .eyebrow,.build-section h2{color:var(--ink)!important}
+.build-section h2 em{color:var(--blue)!important}
+.command code{color:var(--ink)!important}
+
+/* Blue verification field */
+.verify,.verify .scene-marker,.verify .eyebrow,.verify-top h2{color:var(--paper)!important}
+.verify-top h2 span{color:var(--lime)!important}
+.doc,.doc b,.doc small,.doc span{color:var(--ink)!important}
+.doc:nth-child(4),.doc:nth-child(4) b,.doc:nth-child(4) small,.doc:nth-child(4) span{color:var(--paper)!important}
+
+/* Footer */
+.footer,.footer p,.footer a{color:var(--paper)!important}
+.footer a:last-child{color:var(--lime)!important}
+
+/* Decorative objects must never sit above copy */
+.hero-object,.statement-image,.large-object,.network-visual,.emission-visual{isolation:isolate!important}
+.hero-object{z-index:4!important}
+
+@media(max-width:900px){
+  .hero .hero-text{box-shadow:none!important;background:transparent!important}
+  .scene-marker{background:transparent!important}
+  .statement-copy,.object-copy,.node-copy{position:relative!important;z-index:10!important}
+}
