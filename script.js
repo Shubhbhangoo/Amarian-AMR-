@@ -1,4 +1,5 @@
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;const progress=document.querySelector('.progress');const copy=document.getElementById('copy');const command='cmake --preset dev && cmake --build build/dev && ctest --preset dev';
+const polish=document.createElement('link');polish.rel='stylesheet';polish.href='site-polish.css';document.head.appendChild(polish);
 addEventListener('scroll',()=>{const max=document.documentElement.scrollHeight-innerHeight;if(progress)progress.style.transform=`scaleX(${max?scrollY/max:0})`},{passive:true});
 if(copy)copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(command);copy.textContent='COPIED';setTimeout(()=>copy.textContent='COPY',1400)}catch{copy.textContent='SELECT'}});
 const reveals=document.querySelectorAll('.reveal');if(reduced||!('IntersectionObserver'in window))reveals.forEach(el=>el.classList.add('is-visible'));else{const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('is-visible');io.unobserve(e.target)}}),{threshold:.12});reveals.forEach(el=>io.observe(el))}
