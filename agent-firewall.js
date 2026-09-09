@@ -1,6 +1,8 @@
 const q=s=>document.querySelector(s);
-const copy=(button,selector)=>{const el=q(selector);if(!button||!el)return;button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(el.textContent.trim());const old=button.textContent;button.textContent='COPIED';setTimeout(()=>button.textContent=old,1400)}catch{button.textContent='COPY FAILED';setTimeout(()=>button.textContent='COPY',1400)}})};
-copy(q('#copy-install'),'#copy-install').parentElement.querySelector('code');
-const install=q('.install-box code');const installButton=q('#copy-install');if(installButton&&install){installButton.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(install.textContent.trim());installButton.textContent='COPIED';setTimeout(()=>installButton.textContent='COPY',1400)}catch{}})}
-const core=q('.firewall-core');document.addEventListener('pointermove',e=>{if(!core||matchMedia('(max-width:800px)').matches)return;const x=(e.clientX/innerWidth-.5)*2,y=(e.clientY/innerHeight-.5)*2;core.style.transform=`translate3d(${x*10}px,${y*10}px,0)`});
-const cards=document.querySelectorAll('.control-map article,.flow-node,.release-list article');cards.forEach(card=>card.addEventListener('pointermove',e=>{const r=card.getBoundingClientRect();card.style.setProperty('--px',`${((e.clientX-r.left)/r.width-.5)*2}`);card.style.setProperty('--py',`${((e.clientY-r.top)/r.height-.5)*2}`)}));
+const install=q('.install-box code');
+const installButton=q('#copy-install');
+if(installButton&&install){installButton.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(install.textContent.trim());const old=installButton.textContent;installButton.textContent='COPIED';setTimeout(()=>installButton.textContent=old,1400)}catch{installButton.textContent='COPY FAILED';setTimeout(()=>installButton.textContent='COPY',1400)}})}
+const core=q('.firewall-core');
+document.addEventListener('pointermove',e=>{if(!core||matchMedia('(max-width:800px)').matches)return;const x=(e.clientX/innerWidth-.5)*2,y=(e.clientY/innerHeight-.5)*2;core.style.transform=`translate3d(${x*10}px,${y*10}px,0)`});
+const cards=document.querySelectorAll('.control-map article,.flow-node,.release-list article');
+cards.forEach(card=>card.addEventListener('pointermove',e=>{const r=card.getBoundingClientRect();card.style.setProperty('--px',`${((e.clientX-r.left)/r.width-.5)*2}`);card.style.setProperty('--py',`${((e.clientY-r.top)/r.height-.5)*2}`)}));
