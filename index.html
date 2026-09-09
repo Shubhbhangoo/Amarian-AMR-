@@ -10,9 +10,17 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="motion.css?v=20260909">
+<link rel="stylesheet" href="motion.css?v=20260910">
 </head>
 <body>
+<div class="entry-screen" id="entry" aria-label="Enter Amarian">
+  <div class="entry-grid"></div>
+  <div class="entry-orbit orbit-one"></div><div class="entry-orbit orbit-two"></div><div class="entry-orbit orbit-three"></div>
+  <div class="entry-core"><img src="assets/amarian-mark.svg" alt="Amarian"><span>AMR</span></div>
+  <div class="entry-copy"><span class="entry-overline">INDEPENDENT MONETARY NETWORK</span><h1>AMARIAN</h1><p>Money, reduced to rules.</p></div>
+  <button class="entry-button" id="enter" type="button"><span>ENTER AMARIAN</span><i>↗</i></button>
+  <div class="entry-status"><span class="entry-dot"></span> PROOF OF WORK · 300S</div>
+</div>
 <div class="progress" aria-hidden="true"></div>
 <header class="site-header">
   <div class="header-inner">
@@ -22,78 +30,19 @@
   </div>
 </header>
 <main id="top">
-  <section class="hero page-shell">
-    <div class="hero-copy reveal">
-      <p class="eyebrow"><span class="signal"></span> INDEPENDENT MONETARY NETWORK</p>
-      <h1>Money,<br><i>reduced to rules.</i></h1>
-      <p class="hero-intro">Amarian is a proof-of-work blockchain engineered as an inspectable monetary machine. The rules for issuance, settlement and consensus live in code.</p>
-      <div class="actions"><a class="button button-dark" href="#protocol">Explore protocol <span>↓</span></a><a class="button" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">Read source <span>↗</span></a></div>
-    </div>
-    <div class="hero-art reveal delay-1" aria-label="Abstract AMR network visualization">
-      <div class="hero-art-grid"></div>
-      <div class="hero-ring ring-a"></div><div class="hero-ring ring-b"></div><div class="hero-ring ring-c"></div>
-      <div class="hero-core"><img src="assets/amarian-mark.svg" alt=""><span>AMR</span><small>POW / 300S</small></div>
-      <div class="hero-note note-a"><span>ASSET</span><b>AMR</b></div>
-      <div class="hero-note note-b"><span>UNIT</span><b>FACET</b></div>
-      <div class="hero-note note-c"><span>PREMINE</span><b>0 AMR</b></div>
-    </div>
-    <div class="hero-data reveal delay-2">
-      <div><span>ASSET</span><strong>AMR</strong></div><div><span>DENOMINATION</span><strong>FACET</strong></div><div><span>PRECISION</span><strong>10¹⁰ / AMR</strong></div><div><span>IMPLEMENTATION</span><strong>C++23</strong></div>
-    </div>
-  </section>
+  <section class="hero page-shell"><div class="hero-copy reveal"><p class="eyebrow"><span class="signal"></span> INDEPENDENT MONETARY NETWORK</p><h1>Money,<br><i>reduced to rules.</i></h1><p class="hero-intro">Amarian is a proof-of-work blockchain engineered as an inspectable monetary machine. The rules for issuance, settlement and consensus live in code.</p><div class="actions"><a class="button button-dark" href="#protocol">Explore protocol <span>↓</span></a><a class="button" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">Read source <span>↗</span></a></div></div><div class="hero-art reveal delay-1" aria-label="Abstract AMR network visualization"><div class="hero-art-grid"></div><div class="hero-ring ring-a"></div><div class="hero-ring ring-b"></div><div class="hero-ring ring-c"></div><div class="hero-core"><img src="assets/amarian-mark.svg" alt=""><span>AMR</span><small>POW / 300S</small></div><div class="hero-note note-a"><span>ASSET</span><b>AMR</b></div><div class="hero-note note-b"><span>UNIT</span><b>FACET</b></div><div class="hero-note note-c"><span>PREMINE</span><b>0 AMR</b></div></div><div class="hero-data reveal delay-2"><div><span>ASSET</span><strong>AMR</strong></div><div><span>DENOMINATION</span><strong>FACET</strong></div><div><span>PRECISION</span><strong>10¹⁰ / AMR</strong></div><div><span>IMPLEMENTATION</span><strong>C++23</strong></div></div></section>
 
-  <section id="protocol" class="dark-band">
-    <div class="page-shell section-block">
-      <div class="section-kicker"><span>01</span><b>THE PROTOCOL</b></div>
-      <div class="section-header">
-        <div><p class="eyebrow">CONSENSUS IS THE PRODUCT</p><h2>Rules first.<br><i>Everything else follows.</i></h2></div>
-        <p>Amarian turns monetary policy into deterministic state transitions. There is no privileged operator above the rules, only implementations that either satisfy them or do not.</p>
-      </div>
-      <div class="protocol-list">
-        <article class="protocol-row"><div class="row-index">01</div><div class="row-main"><h3>Fixed issuance</h3><p>Supply follows a predetermined schedule. No premine, no tail emission, no central mint authority.</p></div><div class="row-metric"><strong>8.4M</strong><span>AMR · TARGET ISSUANCE</span></div></article>
-        <article class="protocol-row"><div class="row-index">02</div><div class="row-main"><h3>Proof of work</h3><p>SHA-256d makes work the measurable weight behind chain history and block production.</p></div><div class="row-metric"><strong>300s</strong><span>BLOCK TARGET</span></div></article>
-        <article class="protocol-row"><div class="row-index">03</div><div class="row-main"><h3>Integer precision</h3><p>AMR is divided into facets, the smallest denomination. Monetary arithmetic remains exact from the smallest unit upward.</p></div><div class="row-metric"><strong>10¹⁰</strong><span>FACETS · 1 AMR</span></div></article>
-      </div>
-    </div>
-  </section>
+  <section id="protocol" class="dark-band"><div class="page-shell section-block"><div class="section-kicker"><span>01</span><b>THE PROTOCOL</b></div><div class="section-header"><div><p class="eyebrow">CONSENSUS IS THE PRODUCT</p><h2>Rules first.<br><i>Everything else follows.</i></h2></div><p>Amarian turns monetary policy into deterministic state transitions. There is no privileged operator above the rules, only implementations that either satisfy them or do not.</p></div><div class="protocol-list"><article class="protocol-row"><div class="row-index">01</div><div class="row-main"><h3>Fixed issuance</h3><p>Supply follows a predetermined schedule. No premine, no tail emission, no central mint authority.</p></div><div class="row-metric"><strong>8.4M</strong><span>AMR · TARGET ISSUANCE</span></div></article><article class="protocol-row"><div class="row-index">02</div><div class="row-main"><h3>Proof of work</h3><p>SHA-256d makes work the measurable weight behind chain history and block production.</p></div><div class="row-metric"><strong>300s</strong><span>BLOCK TARGET</span></div></article><article class="protocol-row"><div class="row-index">03</div><div class="row-main"><h3>Integer precision</h3><p>AMR is divided into facets, the smallest denomination. Monetary arithmetic remains exact from the smallest unit upward.</p></div><div class="row-metric"><strong>10¹⁰</strong><span>FACETS · 1 AMR</span></div></article></div></div></section>
 
-  <section id="architecture" class="page-shell section-block architecture">
-    <div class="section-kicker"><span>02</span><b>ARCHITECTURE</b></div>
-    <div class="section-header"><div><p class="eyebrow">THE MACHINE</p><h2>Every boundary<br><i>has a job.</i></h2></div><p>The protocol core sits at the center. Cryptography, transactions, state, chain selection, networking and RPC surround it as explicit layers.</p></div>
-    <div class="architecture-board">
-      <svg class="connections" viewBox="0 0 1200 640" aria-hidden="true"><path d="M600 320 L160 110 M600 320 L600 82 M600 320 L1040 110 M600 320 L160 530 M600 320 L600 558 M600 320 L1040 530"/><circle cx="600" cy="320" r="126"/></svg>
-      <div class="arch-core"><img src="assets/amarian-mark.svg" alt=""><span>AMARIAN CORE</span><strong>CONSENSUS</strong><small>VALIDATE · ISSUE · WORK</small></div>
-      <div class="arch-node n1"><b>CRYPTO</b><span>hash + signatures</span></div><div class="arch-node n2"><b>PRIMITIVES</b><span>tx + blocks + merkle</span></div><div class="arch-node n3"><b>UTXO</b><span>state + spends</span></div><div class="arch-node n4"><b>CHAIN</b><span>tips + selection</span></div><div class="arch-node n5"><b>MEMPOOL</b><span>fees + policy</span></div><div class="arch-node n6"><b>NETWORK / RPC</b><span>interface layer</span></div>
-    </div>
-  </section>
+  <section id="architecture" class="page-shell section-block architecture"><div class="section-kicker"><span>02</span><b>ARCHITECTURE</b></div><div class="section-header"><div><p class="eyebrow">THE MACHINE</p><h2>Every boundary<br><i>has a job.</i></h2></div><p>The protocol core sits at the center. Cryptography, transactions, state, chain selection, networking and RPC surround it as explicit layers.</p></div><div class="architecture-board"><svg class="connections" viewBox="0 0 1200 640" aria-hidden="true"><path d="M600 320 L160 110 M600 320 L600 82 M600 320 L1040 110 M600 320 L160 530 M600 320 L600 558 M600 320 L1040 530"/><circle cx="600" cy="320" r="126"/></svg><div class="arch-core"><img src="assets/amarian-mark.svg" alt=""><span>AMARIAN CORE</span><strong>CONSENSUS</strong><small>VALIDATE · ISSUE · WORK</small></div><div class="arch-node n1"><b>CRYPTO</b><span>hash + signatures</span></div><div class="arch-node n2"><b>PRIMITIVES</b><span>tx + blocks + merkle</span></div><div class="arch-node n3"><b>UTXO</b><span>state + spends</span></div><div class="arch-node n4"><b>CHAIN</b><span>tips + selection</span></div><div class="arch-node n5"><b>MEMPOOL</b><span>fees + policy</span></div><div class="arch-node n6"><b>NETWORK / RPC</b><span>interface layer</span></div></div></section>
 
-  <section id="asset" class="asset-band">
-    <div class="page-shell asset-layout">
-      <div class="asset-art reveal"><div class="coin-shadow"></div><div class="coin"><div class="coin-face"><img src="assets/amarian-mark.svg" alt=""><strong>AMR</strong><span>AMARIAN</span></div></div><span class="asset-line line-1"></span><span class="asset-line line-2"></span><div class="asset-label label-1"><small>NATIVE CURRENCY</small><b>AMR</b></div><div class="asset-label label-2"><small>SMALLEST UNIT</small><b>FACET</b></div></div>
-      <div class="asset-copy reveal delay-1"><div class="section-kicker"><span>03</span><b>THE ASSET</b></div><p class="eyebrow">AMR / FACET</p><h2>One AMR.<br><i>10 billion facets.</i></h2><p>AMR is the native currency. A facet is its smallest denomination. Supply and precision are different concepts, and the protocol keeps that distinction explicit.</p><div class="asset-spec"><div><span>1 AMR</span><strong>10,000,000,000</strong><small>FACETS</small></div><div><span>PREMINE</span><strong>0 AMR</strong><small>AT GENESIS</small></div><div><span>UNIT</span><strong>FACET</strong><small>INTEGER PRECISION</small></div></div></div>
-    </div>
-  </section>
+  <section id="asset" class="asset-band"><div class="page-shell asset-layout"><div class="asset-art reveal"><div class="coin-shadow"></div><div class="coin"><div class="coin-face"><img src="assets/amarian-mark.svg" alt=""><strong>AMR</strong><span>AMARIAN</span></div></div><span class="asset-line line-1"></span><span class="asset-line line-2"></span><div class="asset-label label-1"><small>NATIVE CURRENCY</small><b>AMR</b></div><div class="asset-label label-2"><small>SMALLEST UNIT</small><b>FACET</b></div></div><div class="asset-copy reveal delay-1"><div class="section-kicker"><span>03</span><b>THE ASSET</b></div><p class="eyebrow">AMR / FACET</p><h2>One AMR.<br><i>10 billion facets.</i></h2><p>AMR is the native currency. A facet is its smallest denomination. Supply and precision are different concepts, and the protocol keeps that distinction explicit.</p><div class="asset-spec"><div><span>1 AMR</span><strong>10,000,000,000</strong><small>FACETS</small></div><div><span>PREMINE</span><strong>0 AMR</strong><small>AT GENESIS</small></div><div><span>UNIT</span><strong>FACET</strong><small>INTEGER PRECISION</small></div></div></div></div></section>
 
-  <section id="economics" class="page-shell section-block economics">
-    <div class="section-kicker"><span>04</span><b>ECONOMICS</b></div>
-    <div class="section-header"><div><p class="eyebrow">TIME AS CODE</p><h2>Issuance<br><i>decays by design.</i></h2></div><p>Initial reward is 10 AMR. Every 105,000 blocks the reward becomes 7/8 of the previous era until issuance ends at block height 18,795,000.</p></div>
-    <div class="emission">
-      <div class="emission-top"><span>BLOCK REWARD</span><span>ERA 01 → FINAL</span></div>
-      <div class="emission-graph"><div class="graph-grid"></div><svg viewBox="0 0 1200 360" preserveAspectRatio="none" aria-label="Reward decreases over time"><path class="graph-area" d="M0 54 C120 70 160 100 260 130 S420 185 560 220 S730 260 870 292 S1050 320 1200 334 L1200 360 L0 360Z"/><path class="graph-line" d="M0 54 C120 70 160 100 260 130 S420 185 560 220 S730 260 870 292 S1050 320 1200 334"/></svg><div class="graph-mark gm1"><b>10 AMR</b><span>INITIAL REWARD</span></div><div class="graph-mark gm2"><b>2.63 AMR</b><span>ERA 5</span></div><div class="graph-mark gm3"><b>18,795,000</b><span>ISSUANCE ENDS</span></div></div>
-      <div class="emission-foot"><span>GENESIS</span><span>105,000 BLOCKS / ERA</span><span>7/8 REWARD FACTOR</span><span>FINAL HEIGHT 18,795,000</span></div>
-    </div>
-  </section>
+  <section id="economics" class="page-shell section-block economics"><div class="section-kicker"><span>04</span><b>ECONOMICS</b></div><div class="section-header"><div><p class="eyebrow">TIME AS CODE</p><h2>Issuance<br><i>decays by design.</i></h2></div><p>Initial reward is 10 AMR. Every 105,000 blocks the reward becomes 7/8 of the previous era until issuance ends at block height 18,795,000.</p></div><div class="emission"><div class="emission-top"><span>BLOCK REWARD</span><span>ERA 01 → FINAL</span></div><div class="emission-graph"><div class="graph-grid"></div><svg viewBox="0 0 1200 360" preserveAspectRatio="none" aria-label="Reward decreases over time"><path class="graph-area" d="M0 54 C120 70 160 100 260 130 S420 185 560 220 S730 260 870 292 S1050 320 1200 334 L1200 360 L0 360Z"/><path class="graph-line" d="M0 54 C120 70 160 100 260 130 S420 185 560 220 S730 260 870 292 S1050 320 1200 334"/></svg><div class="graph-mark gm1"><b>10 AMR</b><span>INITIAL REWARD</span></div><div class="graph-mark gm2"><b>2.63 AMR</b><span>ERA 5</span></div><div class="graph-mark gm3"><b>18,795,000</b><span>ISSUANCE ENDS</span></div></div><div class="emission-foot"><span>GENESIS</span><span>105,000 BLOCKS / ERA</span><span>7/8 REWARD FACTOR</span><span>FINAL HEIGHT 18,795,000</span></div></div></section>
 
-  <section class="verify-band">
-    <div class="page-shell verify-layout">
-      <div class="reveal"><div class="section-kicker"><span>05</span><b>VERIFICATION</b></div><p class="eyebrow">DON'T TRUST THE HOMEPAGE</p><h2>Make the machine<br><i>your evidence.</i></h2><p>Clone it. Build it. Run it. Read the protocol. The claim is only as strong as the implementation underneath it.</p><a class="button button-light" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">Open repository <span>↗</span></a></div>
-      <div class="terminal reveal delay-1"><div class="terminal-bar"><span>AMARIAND / REGTEST</span><b>ONLINE</b></div><div class="terminal-body"><p><span>01</span> boot consensus <b>OK</b></p><p><span>02</span> load utxo set <b>OK</b></p><p><span>03</span> initialise storage <b>OK</b></p><p><span>04</span> bind p2p transport <b>OK</b></p><p><span>05</span> generate block <b>5</b></p><p><span>06</span> validate tip <b>HEIGHT 5</b></p><p class="terminal-prompt">amariand --verify <i>_</i></p></div></div>
-    </div>
-  </section>
+  <section class="verify-band"><div class="page-shell verify-layout"><div class="reveal"><div class="section-kicker"><span>05</span><b>VERIFICATION</b></div><p class="eyebrow">DON'T TRUST THE HOMEPAGE</p><h2>Make the machine<br><i>your evidence.</i></h2><p>Clone it. Build it. Run it. Read the protocol. The claim is only as strong as the implementation underneath it.</p><a class="button button-light" href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">Open repository <span>↗</span></a></div><div class="terminal reveal delay-1"><div class="terminal-bar"><span>AMARIAND / REGTEST</span><b>ONLINE</b></div><div class="terminal-body"><p><span>01</span> boot consensus <b>OK</b></p><p><span>02</span> load utxo set <b>OK</b></p><p><span>03</span> initialise storage <b>OK</b></p><p><span>04</span> bind p2p transport <b>OK</b></p><p><span>05</span> generate block <b>5</b></p><p><span>06</span> validate tip <b>HEIGHT 5</b></p><p class="terminal-prompt">amariand --verify <i>_</i></p></div></div></div></section>
 
-  <section id="build" class="build-band">
-    <div class="page-shell build-layout"><div class="section-kicker"><span>06</span><b>BUILD AMARIAN</b></div><div class="build-title"><p class="eyebrow">FROM SOURCE</p><h2>Build it.<br><i>Then verify it.</i></h2></div><div class="build-box"><div><span>DEVELOPMENT PRESET</span><code>cmake --preset dev &amp;&amp; cmake --build build/dev &amp;&amp; ctest --preset dev</code></div><button id="copy" type="button">COPY</button></div><div class="doc-links"><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/AMARIAN_PROTOCOL.md" target="_blank">Protocol <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PQ_CRYPTO.md" target="_blank">Cryptography <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/THREAT_MODEL.md" target="_blank">Threat model <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PHASE12_MEASUREMENTS.md" target="_blank">Measurements <span>↗</span></a></div></div>
-  </section>
+  <section id="build" class="build-band"><div class="page-shell build-layout"><div class="section-kicker"><span>06</span><b>BUILD AMARIAN</b></div><div class="build-title"><p class="eyebrow">FROM SOURCE</p><h2>Build it.<br><i>Then verify it.</i></h2></div><div class="build-box"><div><span>DEVELOPMENT PRESET</span><code>cmake --preset dev &amp;&amp; cmake --build build/dev &amp;&amp; ctest --preset dev</code></div><button id="copy" type="button">COPY</button></div><div class="doc-links"><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/AMARIAN_PROTOCOL.md" target="_blank">Protocol <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PQ_CRYPTO.md" target="_blank">Cryptography <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/THREAT_MODEL.md" target="_blank">Threat model <span>↗</span></a><a href="https://github.com/Shubhbhangoo/Amarian-AMR-/blob/main/docs/PHASE12_MEASUREMENTS.md" target="_blank">Measurements <span>↗</span></a></div></div></section>
 </main>
 <footer class="site-footer"><div class="page-shell footer-inner"><a class="brand" href="#top"><img src="assets/amarian-mark.svg" alt=""><span>AMARIAN</span></a><span>INDEPENDENT ENGINEERING PROJECT · MIT LICENSED</span><a href="https://github.com/Shubhbhangoo/Amarian-AMR-" target="_blank" rel="noreferrer">SOURCE ↗</a></div></footer>
 <script src="script.js"></script>
