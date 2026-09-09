@@ -2,6 +2,8 @@
 
 An independent proof-of-work blockchain built from scratch in C++23.
 
+**Latest release: v2.8**
+
 Bitcoin is digital gold. Amarian aims to be digital diamond: scarce, durable,
 hard to manipulate, highly divisible, self-custodial, and designed from the
 first commit for a world in which large quantum computers exist.
@@ -14,12 +16,12 @@ advice.
 
 ## Status
 
-**Phases 0 through 12 are complete.** The project has a validating node, CPU mining,
-mempool and RPC workflows, wallet and backup/restore support, post-quantum signature
-validation, live P2P synchronization, an explorer API, release packaging, and
-reproducible performance measurements. Phase 7 hybrid ownership is explicitly deferred
-for generation 1 based on benchmark evidence. Phase 13 is mainnet readiness and has not
-started.
+**v2.8 is released.** Phases 0 through 12 are complete and Phase 13,
+mainnet readiness, is in progress. The project has a validating node, CPU
+mining, mempool and RPC workflows, wallet and backup/restore support,
+post-quantum signature validation, live P2P synchronization, an explorer API,
+release packaging, and reproducible performance measurements. Phase 7 hybrid
+ownership is explicitly deferred for generation 1 based on benchmark evidence.
 
 What works today, verified by the acceptance scripts and the full test suite:
 
@@ -29,7 +31,7 @@ What works today, verified by the acceptance scripts and the full test suite:
 | `util`: byte/hash types, strict hex codec, canonical serialisation codec, checked arithmetic, logging, CLI options | working |
 | `crypto`: SHA-256, double SHA-256, tagged hashing; signature scheme registry; verification | working |
 | `primitives`: amounts, outpoints, spend conditions, locks, witnesses, transactions, blocks, Merkle tree, signature hash | working |
-| `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation, the contextual input rules, accumulated work | working |
+| `consensus`: chain parameters for three networks, issuance schedule, genesis, compact target codec, context-free block and transaction rules, spend authorisation, contextual input rules, accumulated work | working |
 | `utxo`: the unspent output set, atomic block application and reversal, undo records | working |
 | `chain`: the header tree, accumulated work per branch, the best-tip rule, the revert/apply plan between two tips, and the activation that carries it out | working |
 | `storage`: coins, block bodies, undo records, the header tree and the tip in RocksDB, atomic across all five | working |
@@ -40,8 +42,8 @@ What works today, verified by the acceptance scripts and the full test suite:
 | Wallet | **complete** (Phase 5) — key derivation, bech32m addresses, coin selection, fee estimation, transaction builder, BIP-39 backup/restore, and `amarian-wallet` CLI |
 | Post-quantum signatures | working in consensus and wallet end-to-end tests |
 
-Phase 12 results, including live socket byte counts, cold import/storage data, and
-three-node convergence, are published in [docs/PHASE12_MEASUREMENTS.md](docs/PHASE12_MEASUREMENTS.md).
+Phase 12 results, including live socket byte counts, cold import/storage data,
+and three-node convergence, are published in [docs/PHASE12_MEASUREMENTS.md](docs/PHASE12_MEASUREMENTS.md).
 See [docs/ROADMAP.md](docs/ROADMAP.md) and [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)
 for the Phase 13 launch-readiness work. This project makes no claim of production
 security or monetary value.
@@ -160,8 +162,7 @@ storage, networking, wallet or RPC.** See
 Not finalised. `AMR` is the working label. It is unclaimed among the coins
 CoinGecko indexes as of 2026-09-04, but it is in active use on the NYSE by
 Alpha Metallurgical Resources. The ticker is a display-layer chain parameter
-and is not consensus-critical, so it can change without a fork. See
-[docs/ECONOMICS.md](docs/ECONOMICS.md#unit-naming-and-ticker).
+and is not consensus-critical, so it can change without a fork. See [docs/ECONOMICS.md](docs/ECONOMICS.md#unit-naming-and-ticker).
 
 ## Licence
 
