@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#020403">
+<meta name="description" content="Agent Firewall is deterministic, fail-closed security control-plane infrastructure for autonomous AI agents and automated tool use.">
+<title>Agent Firewall | Security control plane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="agent-firewall.css?v=20260910">
+</head>
+<body>
+<div class="matrix-canvas" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
+<header class="af-header">
+  <a class="af-brand" href="index.html"><span class="af-mark">AF</span><span>AGENT FIREWALL</span></a>
+  <nav><a href="#boundary">Boundary</a><a href="#architecture">Architecture</a><a href="#releases">Releases</a><a href="#verify">Verify</a></nav>
+  <a class="af-source" href="https://github.com/Shubhbhangoo/agent-firewall" target="_blank" rel="noreferrer">SOURCE <span>↗</span></a>
+</header>
+<main>
+<section class="af-hero">
+  <div class="hero-terminal"><span>SECURITY CONTROL PLANE</span><b>ONLINE</b></div>
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow"><i></i> AUTONOMOUS SYSTEMS / AUTHORIZATION</p>
+      <h1>Agents can act.<br><em>The boundary decides.</em></h1>
+      <p class="hero-intro">Agent Firewall is security control-plane infrastructure for autonomous AI agents and automated tool use. Authorization stays deterministic, explicit, and fail-closed.</p>
+      <div class="hero-actions"><a class="af-button primary" href="#boundary">Inspect boundary <span>↓</span></a><a class="af-button" href="https://github.com/Shubhbhangoo/agent-firewall" target="_blank" rel="noreferrer">Read source <span>↗</span></a></div>
+    </div>
+    <div class="firewall-core" aria-label="Agent Firewall authorization boundary">
+      <div class="core-radar"></div><div class="core-ring r1"></div><div class="core-ring r2"></div><div class="core-ring r3"></div>
+      <div class="core-lock"><span>AF</span><small>FAIL<br>CLOSED</small></div>
+      <div class="core-label l1">IDENTITY</div><div class="core-label l2">POLICY</div><div class="core-label l3">PROVENANCE</div><div class="core-label l4">RISK</div>
+    </div>
+  </div>
+  <div class="hero-stats"><div><strong>2.8.0</strong><span>CURRENT RELEASE</span></div><div><strong>19</strong><span>INVARIANTS</span></div><div><strong>1</strong><span>ALLOW ORIGIN</span></div><div><strong>0</strong><span>SECOND PATHS</span></div></div>
+</section>
+
+<section id="boundary" class="dark-section">
+  <div class="section-kicker"><span>01</span> THE BOUNDARY</div>
+  <div class="section-head"><div><p class="eyebrow">NO MODEL GETS TO VOTE</p><h2>Security context<br><em>surrounds authority.</em></h2></div><p>Analysis can inform policy. It cannot grant permission. The authoritative decision path remains <code>FirewallSDK.authorize()</code>.</p></div>
+  <div class="flow">
+    <div class="flow-node"><b>IDENTITY</b><span>who is acting</span></div><i>→</i><div class="flow-node"><b>TASK</b><span>what it wants</span></div><i>→</i><div class="flow-node"><b>CAPABILITY</b><span>what is permitted</span></div><i>→</i><div class="flow-node boundary"><b>AUTHORIZE()</b><span>ALLOW / DENY / REFUSE</span></div><i>→</i><div class="flow-node"><b>EXECUTION</b><span>what actually runs</span></div>
+  </div>
+  <div class="deny-grid"><div><span>✕</span><b>LLM says safe</b><small>not authorization</small></div><div><span>✕</span><b>risk score is low</b><small>not authorization</small></div><div><span>✕</span><b>agent is trusted</b><small>not authorization</small></div><div class="accepted"><span>✓</span><b>deterministic gate</b><small>the only allow origin</small></div></div>
+</section>
+
+<section id="architecture" class="architecture-section">
+  <div class="section-kicker"><span>02</span> CONTROL PLANE</div>
+  <div class="section-head"><div><p class="eyebrow">DEFENSE IN DEPTH</p><h2>One gate.<br><em>Many witnesses.</em></h2></div><p>Identity, provenance, monitoring, behavioral analysis, simulation, evidence and response provide security context around the authorization boundary without becoming alternate authority paths.</p></div>
+  <div class="control-map">
+    <div class="map-line"></div><div class="map-core"><span>AUTHORIZE()</span><b>DECISION</b><small>FAIL-CLOSED</small></div>
+    <article><span>01</span><b>IDENTITY</b><p>issuer trust<br>delegation lineage</p></article>
+    <article><span>02</span><b>PROVENANCE</b><p>signatures<br>claim integrity</p></article>
+    <article><span>03</span><b>POLICY</b><p>capabilities<br>explicit constraints</p></article>
+    <article><span>04</span><b>RISK / AEGIS</b><p>live posture<br>adaptive narrowing</p></article>
+    <article><span>05</span><b>EXECUTION</b><p>lease continuity<br>single-use authority</p></article>
+    <article><span>06</span><b>EVIDENCE</b><p>receipts<br>observable outcomes</p></article>
+  </div>
+</section>
+
+<section id="releases" class="release-section">
+  <div class="section-kicker"><span>03</span> RELEASE LOG</div>
+  <div class="section-head"><div><p class="eyebrow">THE BOUNDARY KEEPS GETTING SMALLER</p><h2>v2.8<br><em>owns the record.</em></h2></div><p>Each release attacks a different failure mode while keeping <code>authorize()</code> as the sole allow origin. The goal is not more features. It is fewer ways for reality to become ambiguous.</p></div>
+  <div class="release-list">
+    <article class="current"><span>v2.8</span><div><b>Side-effect commit protocol</b><p>Durable intent, exactly one recorded attempt, explicit <code>SUCCEEDED / FAILED / UNKNOWN</code> outcomes, receipts as observations, and explicit reconciliation. Unknown is never silently promoted to success.</p></div><strong>CURRENT</strong></article>
+    <article><span>v2.7</span><div><b>Execution authority continuity</b><p>An execution lease continues one allow and re-establishes its authority basis before progression. Revocation or expiry mid-flight becomes an explicit terminal failure.</p></div><strong>LEASE</strong></article>
+    <article><span>v2.6</span><div><b>Concurrency integrity</b><p>Widening authority changes are bracketed as intervals. A dirty authorization window is refused rather than reconstructed from inconsistent reads.</p></div><strong>TIME</strong></article>
+    <article><span>v2.5</span><div><b>Attack release</b><p>Hostile input and injected failures were pushed through the shipped authorization boundary until twelve paths that raised instead of deciding became explicit denials.</p></div><strong>ATTACK</strong></article>
+    <article><span>v2.4</span><div><b>Aegis adaptive authority</b><p>Live grants can be narrowed, suspended, revalidated or revoked while work is running, without introducing a second authorization path.</p></div><strong>AEGIS</strong></article>
+  </div>
+</section>
+
+<section id="verify" class="verify-section">
+  <div class="section-kicker"><span>04</span> VERIFY</div>
+  <div class="verify-layout">
+    <div><p class="eyebrow">TRUST NOTHING YOU CANNOT INSPECT</p><h2>Run the<br><em>invariants.</em></h2><p>The repository ships machine-checkable security properties. v2.8 reports <strong>19 invariants: 19 holds, 0 violated, 0 unverifiable</strong> when exercised in strict mode.</p><a class="af-button primary" href="https://github.com/Shubhbhangoo/agent-firewall" target="_blank" rel="noreferrer">Open repository <span>↗</span></a></div>
+    <div class="terminal"><div class="terminal-top"><span>root@aif:~</span><b>SECURE CHANNEL</b></div><div class="terminal-body"><p><i>$</i> python -m firewall.invariants --exercise --strict</p><p class="muted">loading authorization boundary...</p><p><span>[01]</span> FAIL_CLOSED <b>HOLDS</b></p><p><span>[17]</span> AUTHORITY_EPOCH_COVERAGE <b>HOLDS</b></p><p><span>[18]</span> EXECUTION_AUTHORITY_CONTINUITY <b>HOLDS</b></p><p><span>[19]</span> SIDE_EFFECT_COMMIT_INTEGRITY <b>HOLDS</b></p><p class="result">19 invariants: 19 holds, 0 violated, 0 unverifiable</p><p class="cursor">█</p></div></div>
+  </div>
+</section>
+
+<section class="install-section"><div><p class="eyebrow">GET THE CONTROL PLANE</p><h2>pip install<br><em>agent-firewall-security</em></h2></div><div class="install-box"><code>pip install agent-firewall-security==2.8.0</code><button id="copy-install">COPY</button></div><p class="compat">Python 3.10 · 3.11 · 3.12</p></section>
+</main>
+<footer class="af-footer"><a class="af-brand" href="index.html"><span class="af-mark">AF</span><span>AGENT FIREWALL</span></a><span>DETERMINISTIC · EXPLICIT · FAIL-CLOSED</span><a href="https://github.com/Shubhbhangoo/agent-firewall" target="_blank" rel="noreferrer">GITHUB ↗</a></footer>
+<script src="agent-firewall.js?v=20260910"></script>
+</body>
+</html>
